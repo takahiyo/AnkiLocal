@@ -1,0 +1,117 @@
+/**
+ * variables.css - デザイントークン定義
+ *
+ * アプリ全体のビジュアルデザインを CSS Custom Properties で一元管理する（SSOT）。
+ * カラー、タイポグラフィ、スペーシング、シャドウ等すべての値はここで定義し、
+ * 各CSSファイルから var(--xxx) で参照する。
+ *
+ * [REF]
+ * - CSS: base.css, components.css, study.css, animations.css から参照
+ * - HTML: index.html の <link> で最初に読み込む必要がある
+ */
+
+:root {
+  /* ===== カラー: 背景 ===== */
+  --bg-primary: #0f0f23;
+  --bg-secondary: #161631;
+  --bg-card: #1a1a2e;
+  --bg-card-hover: #25254a;
+  --bg-surface: #1e1e3a;
+  --bg-input: #12122a;
+
+  /* ===== カラー: テキスト ===== */
+  --text-primary: #e8e8f0;
+  --text-secondary: #8888a8;
+  --text-muted: #555570;
+  --text-inverse: #0f0f23;
+
+  /* ===== カラー: アクセント ===== */
+  --accent-primary: #7c3aed;
+  --accent-secondary: #3b82f6;
+  --accent-tertiary: #06b6d4;
+
+  /* ===== グラデーション ===== */
+  --gradient-primary: linear-gradient(135deg, #7c3aed, #3b82f6);
+  --gradient-accent: linear-gradient(135deg, #7c3aed, #06b6d4);
+  --gradient-subtle: linear-gradient(135deg, rgba(124, 58, 237, 0.15), rgba(59, 130, 246, 0.15));
+  --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+
+  /* ===== 評価ボタン色 ===== */
+  --btn-again: #ef4444;
+  --btn-again-hover: #f87171;
+  --btn-hard: #f59e0b;
+  --btn-hard-hover: #fbbf24;
+  --btn-good: #10b981;
+  --btn-good-hover: #34d399;
+  --btn-easy: #3b82f6;
+  --btn-easy-hover: #60a5fa;
+
+  /* ===== ステータス色 ===== */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+
+  /* ===== ボーダー ===== */
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --border-glass-hover: rgba(255, 255, 255, 0.15);
+  --border-accent: rgba(124, 58, 237, 0.3);
+  --border-radius-sm: 8px;
+  --border-radius-md: 12px;
+  --border-radius-lg: 16px;
+  --border-radius-xl: 24px;
+  --border-radius-full: 9999px;
+
+  /* ===== シャドウ ===== */
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 40px rgba(0, 0, 0, 0.4);
+  --shadow-glow: 0 0 20px rgba(124, 58, 237, 0.3);
+  --shadow-glow-strong: 0 0 40px rgba(124, 58, 237, 0.5);
+  --shadow-button: 0 2px 12px rgba(0, 0, 0, 0.3);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+  /* ===== タイポグラフィ ===== */
+  --font-family: 'Inter', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 2rem;
+  --font-size-4xl: 2.5rem;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  /* ===== スペーシング ===== */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-2xl: 3rem;
+  --spacing-3xl: 4rem;
+
+  /* ===== レイアウト ===== */
+  --container-max-width: 1200px;
+  --navbar-height: 64px;
+  --card-min-height: 300px;
+
+  /* ===== トランジション ===== */
+  --transition-fast: 150ms ease;
+  --transition-base: 250ms ease;
+  --transition-slow: 400ms ease;
+  --transition-flip: 600ms ease;
+
+  /* ===== z-index レイヤー ===== */
+  --z-base: 1;
+  --z-dropdown: 100;
+  --z-navbar: 500;
+  --z-modal: 1000;
+  --z-toast: 1500;
+}

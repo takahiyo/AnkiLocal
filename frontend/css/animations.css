@@ -1,0 +1,245 @@
+/**
+ * animations.css - アニメーション定義
+ *
+ * アプリ全体で使用する @keyframes とアニメーションユーティリティクラスを定義。
+ * ページ遷移、マイクロインタラクション、ローディングに使用する。
+ *
+ * [REF]
+ * - CSS: variables.css のトランジション定数に依存
+ * - JS: router.js でページ遷移時に .page-transition を付与
+ * - 読み込み順: 最後（5番目）
+ */
+
+/* =============================================
+   フェードアニメーション
+   ============================================= */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes fadeInOnly {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* =============================================
+   スライドアニメーション
+   ============================================= */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* =============================================
+   パルス・グロー
+   ============================================= */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes glowPulse {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(124, 58, 237, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(124, 58, 237, 0.4);
+  }
+}
+
+/* =============================================
+   シマー（スケルトンローディング用）
+   ============================================= */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* =============================================
+   スケールアニメーション
+   ============================================= */
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes bounceIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* =============================================
+   紙吹雪（学習完了祝福用）
+   ============================================= */
+@keyframes confettiFall {
+  0% {
+    transform: translateY(-100%) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100vh) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+/* =============================================
+   ユーティリティクラス
+   ============================================= */
+
+/* ページ遷移 */
+.page-transition {
+  animation: fadeIn 0.3s ease;
+}
+
+/* スタガードアニメーション（子要素の順次表示） */
+.stagger-in > * {
+  opacity: 0;
+  animation: slideUp 0.4s ease forwards;
+}
+
+.stagger-in > *:nth-child(1) { animation-delay: 0.05s; }
+.stagger-in > *:nth-child(2) { animation-delay: 0.1s; }
+.stagger-in > *:nth-child(3) { animation-delay: 0.15s; }
+.stagger-in > *:nth-child(4) { animation-delay: 0.2s; }
+.stagger-in > *:nth-child(5) { animation-delay: 0.25s; }
+.stagger-in > *:nth-child(6) { animation-delay: 0.3s; }
+.stagger-in > *:nth-child(7) { animation-delay: 0.35s; }
+.stagger-in > *:nth-child(8) { animation-delay: 0.4s; }
+.stagger-in > *:nth-child(n+9) { animation-delay: 0.45s; }
+
+/* パルス */
+.animate-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* シマー（ローディング） */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* グローパルス */
+.animate-glow {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+/* バウンスイン */
+.animate-bounce-in {
+  animation: bounceIn 0.6s ease;
+}
+
+/* フェードインユーティリティ */
+.animate-fade-in {
+  animation: fadeIn 0.3s ease;
+}
+
+/* スケールイン */
+.animate-scale-in {
+  animation: scaleIn 0.3s ease;
+}
+
+/* =============================================
+   アクセシビリティ: モーション抑制
+   ============================================= */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .study-card-inner {
+    transition-duration: 0.01ms !important;
+  }
+}
