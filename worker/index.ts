@@ -4,9 +4,15 @@ import { calculateNextReview, Rating } from "./api/srs";
 
 type Bindings = {
   DB: D1Database;
+  ASSETS: Fetcher;
 };
 
 const app = new Hono<{ Bindings: Bindings }>().basePath("/api");
+
+// 未定義ルート（静的アセットへのアクセス）をCloudflare Pagesにフォールスルーする
+app.notFound(async (c) => {
+  return c.env.ASSETS.fetch(c.req.raw);
+});
 
 // --- トークン認証ミドルウェア ---
 app.use("*", async (c, next) => {

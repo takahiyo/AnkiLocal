@@ -2378,6 +2378,9 @@ function calculateNextReview(state, rating) {
 
 // worker/index.ts
 var app = new Hono2().basePath("/api");
+app.notFound(async (c) => {
+  return c.env.ASSETS.fetch(c.req.raw);
+});
 app.use("*", async (c, next) => {
   const expectedToken = c.env.ACCESS_TOKEN || "ankilocal-secret";
   let token = c.req.query("token");
