@@ -4,15 +4,16 @@
   "description": "AnkiLocal - Cloudflare Pages + D1 Version",
   "main": "index.js",
   "scripts": {
-    "dev": "wrangler pages dev --d1 DB=dd634510-952b-4a15-a0d3-adcdb2c10970 --compatibility-date=2026-07-02",
-    "build": "echo 'No build required'",
-    "deploy": "wrangler pages deploy"
+    "dev": "wrangler pages dev frontend --d1 DB=dd634510-952b-4a15-a0d3-adcdb2c10970 --compatibility-date=2026-07-02",
+    "build": "esbuild worker/index.ts --bundle --outfile=frontend/_worker.js --format=esm --target=es2022 --platform=neutral",
+    "deploy": "npm run build && wrangler pages deploy"
   },
   "dependencies": {
     "hono": "^4.4.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240620.0",
+    "esbuild": "^0.28.1",
     "typescript": "^5.5.2",
     "wrangler": "^3.67.0"
   }

@@ -1,7 +1,6 @@
 import { Hono } from "hono";
-import { handle } from "hono/cloudflare-pages";
-import { parseAnkiFile } from "./parser";
-import { calculateNextReview, Rating } from "./srs";
+import { parseAnkiFile } from "./api/parser";
+import { calculateNextReview, Rating } from "./api/srs";
 
 type Bindings = {
   DB: D1Database;
@@ -520,4 +519,4 @@ app.get("/stats/deck/:deckId", async (c) => {
   }
 });
 
-export const onRequest = handle(app);
+export default app;
