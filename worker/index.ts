@@ -134,73 +134,81 @@ app.post("/import", async (c) => {
     // デッキ名 -> IDのキャッシュ
     const deckCache: Record<string, number> = {};
     const decksCreated: string[] = [];
-    let cardsCreated = 0;
-    let skipped = 0;
     const uniqueNotes = new Set<string>();
+    
+    const uniqueDeckNames = Array.from(new Set(parsedCards.map(c => c.deck_name)));
 
-    for (const card of parsedCards) {
-      uniqueNotes.add(card.guid);
+    // 1. 既存デッキの取得
+    const existingDecks = await db.prepare("SELECT id, name FROM decks").all<{ id: number, name: string }>();
+    for (const d of existingDecks.results) {
+      deckCache[d.name] = d.id;
+    }
 
-      // デッキの取得または作成
-      if (!deckCache[card.deck_name]) {
-        const existingDeck = await db
-          .prepare("SELECT id FROM decks WHERE name = ?")
-          .bind(card.deck_name)
-          .first<{ id: number }>();
-
-        if (existingDeck) {
-          deckCache[card.deck_name] = existingDeck.id;
-        } else {
-          const insertDeck = await db
-            .prepare("INSERT INTO decks (name) VALUES (?)")
-            .bind(card.deck_name)
-            .run();
-          
-          const newId = insertDeck.meta.last_row_id;
-          deckCache[card.deck_name] = newId;
-          decksCreated.push(card.deck_name);
+    // 2. 不足しているデッキをバッチ作成
+    const missingDecks = uniqueDeckNames.filter(name => !deckCache[name]);
+    if (missingDecks.length > 0) {
+      const insertDeckStmts = missingDecks.map(name => 
+        db.prepare("INSERT INTO decks (name) VALUES (?)").bind(name)
+      );
+      await db.batch(insertDeckStmts);
+      
+      // 作成したデッキのIDを再取得
+      const newDecks = await db.prepare("SELECT id, name FROM decks").all<{ id: number, name: string }>();
+      for (const d of newDecks.results) {
+        deckCache[d.name] = d.id;
+        if (missingDecks.includes(d.name)) {
+          decksCreated.push(d.name);
         }
-      }
-
-      const deckId = deckCache[card.deck_name];
-
-      // カードの挿入 (重複はスキップ)
-      try {
-        const insertCard = await db
-          .prepare(
-            `INSERT INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(
-            card.guid,
-            deckId,
-            card.note_type,
-            card.front,
-            card.back,
-            card.tags,
-            card.cloze_count,
-            card.cloze_index,
-            card.is_reversed ? 1 : 0
-          )
-          .run();
-
-        const cardId = insertCard.meta.last_row_id;
-
-        // card_statesの初期レコード作成
-        await db.prepare("INSERT INTO card_states (card_id) VALUES (?)").bind(cardId).run();
-        cardsCreated++;
-      } catch (err: any) {
-        // UNIQUE制約違反時は重複としてスキップ
-        console.error("Card insert error:", err);
-        skipped++;
       }
     }
 
+    let cardsCreated = 0;
+    
+    // 3. カードの挿入ステートメントを準備
+    const insertStmts = [];
+    for (const card of parsedCards) {
+      uniqueNotes.add(card.guid);
+      const deckId = deckCache[card.deck_name];
+      insertStmts.push(
+        db.prepare(
+          `INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          card.guid,
+          deckId,
+          card.note_type,
+          card.front,
+          card.back,
+          card.tags,
+          card.cloze_count,
+          card.cloze_index,
+          card.is_reversed ? 1 : 0
+        )
+      );
+    }
+
+    // 4. 100件ずつバッチ実行してAPIリクエスト数制限を回避
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < insertStmts.length; i += BATCH_SIZE) {
+      const chunk = insertStmts.slice(i, i + BATCH_SIZE);
+      const results = await db.batch(chunk);
+      for (const res of results) {
+        if (res.meta && res.meta.changes) {
+          cardsCreated += res.meta.changes;
+        }
+      }
+    }
+
+    // 5. 新規カードに対する card_states の初期レコードを一括作成
+    await db.prepare("INSERT OR IGNORE INTO card_states (card_id) SELECT id FROM cards").run();
+
+    const skipped = parsedCards.length - cardsCreated;
+
     // フロントエンド (import.js) の求めるレスポンス形式にマッピング
     const importedDecks = await Promise.all(
-      decksCreated.map(async (name) => {
-        const deckRow = await db.prepare("SELECT id FROM decks WHERE name = ?").bind(name).first<{ id: number }>();
-        const counts = deckRow ? await getDeckCounts(db, deckRow.id) : { total: 0 };
+      uniqueDeckNames.map(async (name) => {
+        const deckId = deckCache[name];
+        const counts = await getDeckCounts(db, deckId);
         return { name, card_count: counts.total };
       })
     );
