@@ -54,7 +54,7 @@
                     <div class="spinner"></div>
                     <p>デッキを読み込んでいます...</p>
                 </div>
-                <div id="deck-list-container" style="display: none;">
+                <div id="deck-list-container">
                     <div id="deck-list-grid" class="deck-grid">
                         <!-- 動的に挿入されます -->
                     </div>
@@ -62,7 +62,7 @@
             </section>
 
             <!-- 2. 学習画面 -->
-            <section id="page-study" class="page-section" style="display: none;">
+            <section id="page-study" class="page-section">
                 <div class="study-header">
                     <button id="study-back-btn" class="btn-back">← 戻る</button>
                     <h2 id="study-deck-name">デッキ名</h2>
@@ -99,7 +99,7 @@
                     <!-- 操作パネル -->
                     <div class="study-controls">
                         <button id="study-show-answer" class="btn btn-primary btn-answer">答えを見る</button>
-                        <div id="study-rating-buttons" class="rating-buttons" style="display: none;">
+                        <div id="study-rating-buttons" class="rating-buttons">
                             <button id="study-btn-again" class="btn btn-rate btn-again">
                                 <span class="rate-label">Again</span>
                                 <span class="rate-desc">やり直し</span>
@@ -121,7 +121,7 @@
                 </div>
 
                 <!-- デッキ学習完了画面 -->
-                <div id="study-complete" class="study-complete-container" style="display: none;">
+                <div id="study-complete" class="study-complete-container">
                     <div class="complete-card card">
                         <div class="complete-icon">🎉</div>
                         <h3>素晴らしい！</h3>
@@ -132,7 +132,7 @@
             </section>
 
             <!-- 3. 統計画面 -->
-            <section id="page-stats" class="page-section" style="display: none;">
+            <section id="page-stats" class="page-section">
                 <div class="section-header">
                     <h2>学習統計</h2>
                     <p class="section-desc">これまでの学習進捗と成果のビジュアルレポートです。</p>
@@ -142,7 +142,7 @@
                     <p>統計データを読み込んでいます...</p>
                 </div>
                 
-                <div id="stats-container" style="display: none;">
+                <div id="stats-container">
                     <!-- サマリーカードグリッド -->
                     <div id="stats-summary-grid" class="stats-summary-grid">
                         <div class="stat-card">
@@ -217,7 +217,7 @@
             </section>
 
             <!-- 4. インポート画面 -->
-            <section id="page-import" class="page-section" style="display: none;">
+            <section id="page-import" class="page-section">
                 <div class="section-header">
                     <h2>デッキインポート</h2>
                     <p class="section-desc">Ankiからエクスポートしたタブ区切りテキストファイルをアップロードします。</p>
@@ -228,18 +228,18 @@
                         <div class="drop-zone-content">
                             <span class="drop-zone-icon">📁</span>
                             <p class="drop-zone-text">ここにファイルをドラッグ＆ドロップ、または選択</p>
-                            <input type="file" id="import-file-input" accept=".txt" style="display: none;">
+                            <input type="file" id="import-file-input" accept=".txt" class="hidden">
                             <button id="import-file-btn" class="btn btn-secondary">ファイルを選択</button>
                         </div>
                     </div>
 
-                    <div id="import-loading" class="loading-spinner" style="display: none;">
+                    <div id="import-loading" class="loading-spinner hidden">
                         <div class="spinner"></div>
                         <p>ファイルをアップロードしてデータベースへ登録中...</p>
                     </div>
 
                     <!-- インポート結果 -->
-                    <div id="import-result" class="card result-card" style="display: none;">
+                    <div id="import-result" class="card result-card hidden">
                         <div class="result-header">
                             <span class="result-icon">✅</span>
                             <h3>インポートが完了しました</h3>
