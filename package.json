@@ -1,0 +1,18 @@
+{
+  "name": "ankilocal",
+  "version": "1.0.0",
+  "description": "AnkiLocal - Cloudflare Pages + D1 Version",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wrangler pages dev --d1 DB=dd634510-952b-4a15-a0d3-adcdb2c10970 --compatibility-date=2026-07-02",
+    "deploy": "wrangler pages deploy"
+  },
+  "dependencies": {
+    "hono": "^4.4.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240620.0",
+    "typescript": "^5.5.2",
+    "wrangler": "^3.67.0"
+  }
+}

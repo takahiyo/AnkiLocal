@@ -1,17 +1,3 @@
-# ============================================================
-# database.py - データベース管理
-# ============================================================
-# aiosqliteを使用した非同期SQLite接続と、
-# テーブル作成・接続管理を提供する。
-# ============================================================
-
-import aiosqlite
-from pathlib import Path
-from config import settings
-
-# --- テーブル定義SQL（SSOT: スキーマはここに集約） ---
-
-_CREATE_TABLES_SQL = """
 -- デッキテーブル
 CREATE TABLE IF NOT EXISTS decks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,33 +42,3 @@ CREATE TABLE IF NOT EXISTS review_logs (
     reviewed_at TEXT    NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
 );
-"""
-
-
-async def get_connection() -> aiosqlite.Connection:
-    """
-    データベース接続を取得する。
-    外部キー制約を有効化し、WALモードを設定する。
-    """
-    db = await aiosqlite.connect(settings.DB_PATH)
-    db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA foreign_keys = ON")
-    await db.execute("PRAGMA journal_mode = WAL")
-    return db
-
-
-async def init_db() -> None:
-    """
-    データベースを初期化する。
-    テーブルが存在しない場合に作成する。
-    """
-    # DBファイルの親ディレクトリを作成
-    db_path = Path(settings.DB_PATH)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    db = await get_connection()
-    try:
-        await db.executescript(_CREATE_TABLES_SQL)
-        await db.commit()
-    finally:
-        await db.close()

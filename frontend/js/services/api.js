@@ -10,6 +10,27 @@
 
 import { API } from '../constants/index.js';
 
+/** モジュール内で保持する認証トークン */
+let _token = '';
+
+/**
+ * 認証トークンをAPIサービスにセットする。
+ * @param {string} token - トークン文字列
+ */
+export function setToken(token) {
+  _token = token;
+}
+
+/**
+ * APIサービスを初期化する。
+ * @param {object} context - 初期化コンテキスト
+ */
+export function init(context) {
+  if (context && context.token) {
+    _token = context.token;
+  }
+}
+
 /**
  * URLのクエリパラメータからトークンを取得する。
  * ?token=xxx の形式で渡される認証トークンを抽出する。
@@ -26,7 +47,7 @@ function getToken() {
  * @returns {string} トークン付きURL
  */
 function buildUrl(endpoint) {
-  const token = getToken();
+  const token = _token || getToken();
   const separator = endpoint.includes('?') ? '&' : '?';
   return token ? `${endpoint}${separator}token=${encodeURIComponent(token)}` : endpoint;
 }

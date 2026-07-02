@@ -222,6 +222,11 @@
   animation: fadeIn 0.3s ease;
 }
 
+/* フェードアウトユーティリティ */
+.animate-fade-out {
+  animation: fadeOut 0.3s ease forwards;
+}
+
 /* スケールイン */
 .animate-scale-in {
   animation: scaleIn 0.3s ease;

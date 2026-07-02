@@ -14,7 +14,7 @@
  */
 
 import { init as initApi, setToken } from './services/api.js';
-import { init as initRouter, navigate } from './modules/router.js';
+import { init as initRouter, navigateTo } from './modules/router.js';
 import { init as initDeckList } from './modules/deck-list.js';
 import { init as initStudy } from './modules/study.js';
 import { init as initStats } from './modules/stats.js';
@@ -48,6 +48,9 @@ document.addEventListener('DOMContentLoaded', () => {
         token: token
     };
 
+    // グローバルなトースト表示関数の設定
+    setupToast();
+
     initApi(context);
     initDeckList(context);
     initStudy(context);
@@ -60,6 +63,37 @@ document.addEventListener('DOMContentLoaded', () => {
     // ナビゲーションメニューのイベントハンドラ登録
     setupNavigation(token);
 });
+
+/**
+ * トースト通知システム（window._showToast）をセットアップする
+ */
+function setupToast() {
+    window._showToast = (message, type = 'info') => {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+
+        // トースト要素の生成
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type} animate-fade-in`;
+        toast.textContent = message;
+
+        container.appendChild(toast);
+
+        // 3秒後にフェードアウトさせて削除
+        setTimeout(() => {
+            toast.classList.add('animate-fade-out');
+            toast.addEventListener('animationend', () => {
+                toast.remove();
+            });
+            // アニメーションが発火しなかった場合のフォールバック削除
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 500);
+        }, 3000);
+    };
+}
 
 /**
  * トークンが見つからない場合のエラー画面表示
@@ -117,21 +151,21 @@ function setupNavigation(token) {
     if (navDecks) {
         navDecks.addEventListener('click', (e) => {
             e.preventDefault();
-            navigate('#/decks');
+            navigateTo('/decks');
         });
     }
 
     if (navStats) {
         navStats.addEventListener('click', (e) => {
             e.preventDefault();
-            navigate('#/stats');
+            navigateTo('/stats');
         });
     }
 
     if (navImport) {
         navImport.addEventListener('click', (e) => {
             e.preventDefault();
-            navigate('#/import');
+            navigateTo('/import');
         });
     }
 }

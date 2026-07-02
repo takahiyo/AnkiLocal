@@ -36,3 +36,9 @@ scratch_*.py
 
 # LLM Context (generated)
 LLM_CONTEXT.md
+
+# Node.js
+node_modules/
+
+# Cloudflare
+.wrangler/
