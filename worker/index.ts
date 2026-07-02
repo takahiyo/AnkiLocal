@@ -112,7 +112,7 @@ app.get("/decks", async (c) => {
 app.post("/import", async (c) => {
   const db = c.env.DB;
   try {
-    const formData = await c.req.formData();
+    const formData = await c.req.raw.formData();
     const file = formData.get("file") as File;
 
     if (!file) {
@@ -189,8 +189,9 @@ app.post("/import", async (c) => {
         // card_statesの初期レコード作成
         await db.prepare("INSERT INTO card_states (card_id) VALUES (?)").bind(cardId).run();
         cardsCreated++;
-      } catch (err) {
+      } catch (err: any) {
         // UNIQUE制約違反時は重複としてスキップ
+        console.error("Card insert error:", err);
         skipped++;
       }
     }
@@ -216,6 +217,7 @@ app.post("/import", async (c) => {
       decks: importedDecks,
     });
   } catch (err: any) {
+    console.error("Import error:", err.stack || err);
     return c.json({ error: `インポートエラー: ${err.message}` }, 500);
   }
 });

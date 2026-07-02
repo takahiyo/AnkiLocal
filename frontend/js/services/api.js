@@ -61,11 +61,20 @@ function buildUrl(endpoint) {
 async function handleErrorResponse(response) {
   let errorMessage = `HTTP ${response.status}`;
   try {
-    const errorBody = await response.json();
-    errorMessage = errorBody?.error || errorBody?.message || errorMessage;
+    const text = await response.text();
+    console.error(`[API Error Response Body] ${response.status}:`, text);
+    try {
+      const errorBody = JSON.parse(text);
+      errorMessage = errorBody?.error || errorBody?.message || errorMessage;
+    } catch {
+      // JSONパースできない場合はテキストをそのままかステータスコードのみ
+      if (text) errorMessage = text.substring(0, 100);
+    }
   } catch {
-    // JSONパースできない場合はステータスコードのみ
+    // textの読み取り自体が失敗した場合
   }
+  
+  console.error('[API Error]', errorMessage);
   throw new Error(errorMessage);
 }
 
