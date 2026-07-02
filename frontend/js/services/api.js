@@ -76,16 +76,21 @@ async function handleErrorResponse(response) {
  */
 export async function apiGet(endpoint) {
   const url = buildUrl(endpoint);
+  console.log(`[API GET] Request: ${endpoint}`);
+  
   const response = await fetch(url, {
     method: 'GET',
     headers: { 'Accept': 'application/json' },
   });
 
   if (!response.ok) {
+    console.error(`[API GET] Error ${response.status}: ${endpoint}`);
     await handleErrorResponse(response);
   }
 
-  return response.json();
+  const data = await response.json();
+  console.log(`[API GET] Success: ${endpoint}`, data);
+  return data;
 }
 
 /**
@@ -96,6 +101,8 @@ export async function apiGet(endpoint) {
  */
 export async function apiPost(endpoint, body) {
   const url = buildUrl(endpoint);
+  console.log(`[API POST] Request: ${endpoint}`, body);
+
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -106,10 +113,13 @@ export async function apiPost(endpoint, body) {
   });
 
   if (!response.ok) {
+    console.error(`[API POST] Error ${response.status}: ${endpoint}`);
     await handleErrorResponse(response);
   }
 
-  return response.json();
+  const data = await response.json();
+  console.log(`[API POST] Success: ${endpoint}`, data);
+  return data;
 }
 
 /**

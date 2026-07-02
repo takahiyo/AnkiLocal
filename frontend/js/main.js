@@ -14,11 +14,11 @@
  */
 
 import { init as initApi, setToken } from './services/api.js';
-import { init as initRouter, navigateTo } from './modules/router.js';
-import { init as initDeckList } from './modules/deck-list.js';
-import { init as initStudy } from './modules/study.js';
-import { init as initStats } from './modules/stats.js';
-import { init as initImport } from './modules/import.js';
+import { init as initRouter, navigateTo, onRouteChange } from './modules/router.js';
+import { init as initDeckList, loadDeckList } from './modules/deck-list.js';
+import { init as initStudy, startStudySession } from './modules/study.js';
+import { init as initStats, loadStats } from './modules/stats.js';
+import { init as initImport, resetView as resetImportView } from './modules/import.js';
 import { NAV_IDS } from './constants/dom.js';
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -57,6 +57,24 @@ document.addEventListener('DOMContentLoaded', () => {
     initStats(context);
     initImport(context);
     
+    // ルーターのコールバックを登録
+    onRouteChange((route, params) => {
+        console.log(`[Router] Route changed to: ${route}`, params);
+        if (route === '/decks') {
+            loadDeckList();
+        } else if (route === '/study') {
+            if (params && params.deckId) {
+                startStudySession(params.deckId);
+            } else {
+                navigateTo('/decks');
+            }
+        } else if (route === '/stats') {
+            loadStats();
+        } else if (route === '/import') {
+            resetImportView();
+        }
+    });
+
     // ルーターは最後に初期化し、初期画面に遷移
     initRouter(context);
 
