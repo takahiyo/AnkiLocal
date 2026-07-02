@@ -2,6 +2,9 @@ name = "ankilocal"
 pages_build_output_dir = "./frontend"
 compatibility_date = "2026-07-02"
 
+[build]
+command = "npm run build"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "ankilocal-db"

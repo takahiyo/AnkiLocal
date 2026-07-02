@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "wrangler pages dev --d1 DB=dd634510-952b-4a15-a0d3-adcdb2c10970 --compatibility-date=2026-07-02",
+    "build": "echo 'No build required'",
     "deploy": "wrangler pages deploy"
   },
   "dependencies": {
