@@ -144,13 +144,11 @@ app.post("/import", async (c) => {
       deckCache[d.name] = d.id;
     }
 
-    // 2. 不足しているデッキをバッチ作成
+    // 2. 不足しているデッキをマルチ行INSERTで作成
     const missingDecks = uniqueDeckNames.filter(name => !deckCache[name]);
     if (missingDecks.length > 0) {
-      const insertDeckStmts = missingDecks.map(name => 
-        db.prepare("INSERT INTO decks (name) VALUES (?)").bind(name)
-      );
-      await db.batch(insertDeckStmts);
+      const deckPlaceholders = missingDecks.map(() => "(?)").join(", ");
+      await db.prepare(`INSERT OR IGNORE INTO decks (name) VALUES ${deckPlaceholders}`).bind(...missingDecks).run();
       
       // 作成したデッキのIDを再取得
       const newDecks = await db.prepare("SELECT id, name FROM decks").all<{ id: number, name: string }>();
@@ -164,18 +162,18 @@ app.post("/import", async (c) => {
 
     let cardsCreated = 0;
     
-    // 3. カードの挿入ステートメントを準備
-    const insertStmts = [];
-    for (const card of parsedCards) {
-      uniqueNotes.add(card.guid);
-      const deckId = deckCache[card.deck_name];
-      insertStmts.push(
-        db.prepare(
-          `INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(
+    // 3. 100件ずつマルチ行INSERTを実行してAPIサブリクエスト制限を回避
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
+      const chunk = parsedCards.slice(i, i + BATCH_SIZE);
+      const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+      const params: any[] = [];
+      
+      for (const card of chunk) {
+        uniqueNotes.add(card.guid);
+        params.push(
           card.guid,
-          deckId,
+          deckCache[card.deck_name],
           card.note_type,
           card.front,
           card.back,
@@ -183,19 +181,15 @@ app.post("/import", async (c) => {
           card.cloze_count,
           card.cloze_index,
           card.is_reversed ? 1 : 0
-        )
-      );
-    }
-
-    // 4. 100件ずつバッチ実行してAPIリクエスト数制限を回避
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < insertStmts.length; i += BATCH_SIZE) {
-      const chunk = insertStmts.slice(i, i + BATCH_SIZE);
-      const results = await db.batch(chunk);
-      for (const res of results) {
-        if (res.meta && res.meta.changes) {
-          cardsCreated += res.meta.changes;
-        }
+        );
+      }
+      
+      const insertResult = await db.prepare(
+        `INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`
+      ).bind(...params).run();
+      
+      if (insertResult.meta && insertResult.meta.changes) {
+        cardsCreated += insertResult.meta.changes;
       }
     }
 
