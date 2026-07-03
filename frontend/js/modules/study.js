@@ -289,14 +289,14 @@ function calculateNextInterval(card, rating) {
 }
 
 /**
- * 期間フォーマット
+ * 期間フォーマット（日本語）
  */
 function formatInterval(days) {
-  if (days === 0) return "< 1m";
-  if (days < 1) return `${Math.round(days * 24)}h`;
-  if (days < 30) return `${Math.round(days)}d`;
-  if (days < 365) return `${Math.round(days / 30)}mo`;
-  return `${(days / 365).toFixed(1)}y`;
+  if (days === 0) return "1分後";
+  if (days < 1) return `${Math.round(days * 24)}時間後`;
+  if (days < 30) return `${Math.round(days)}日後`;
+  if (days < 365) return `${Math.round(days / 30)}ヶ月後`;
+  return `${(days / 365).toFixed(1)}年後`;
 }
 
 /**
