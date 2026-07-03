@@ -534,9 +534,16 @@
 /* =============================================
    デッキカード（デッキ一覧専用）
    ============================================= */
+.deck-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding: 0 10px;
+}
+
 .deck-card {
   cursor: pointer;
-  padding: var(--spacing-xl);
+  padding: var(--spacing-lg);
 }
 
 .deck-card:hover {

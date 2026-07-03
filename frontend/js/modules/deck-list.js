@@ -39,15 +39,13 @@ function renderDeckCard(deck) {
   const newCount = deck.new_count || 0;
   const learningCount = deck.learning_count || 0;
   const reviewCount = deck.review_count || 0;
-  // 学習可能なカードの合計
   const studyReady = newCount + learningCount + reviewCount;
-  // 習得済み（概算: 全体 - new - learning - review）
   const masteredCount = Math.max(0, total - studyReady);
   const progressPercent = total > 0 ? Math.round((masteredCount / total) * 100) : 0;
 
   return `
     <div class="card deck-card" data-deck-id="${deck.id}" role="button" tabindex="0"
-         aria-label="${deck.name} - ${total}枚のカード">
+         aria-label="${escapeHtml(deck.name)} - ${total}枚のカード">
       <div class="deck-card-header">
         <div>
           <div class="deck-card-name">${escapeHtml(deck.name)}</div>
@@ -58,13 +56,13 @@ function renderDeckCard(deck) {
             ? `<span class="badge badge-review" style="font-size: 0.9rem; padding: 4px 12px;">${studyReady}</span>`
             : `<span class="badge" style="background: rgba(16,185,129,0.15); color: var(--color-success); border: 1px solid rgba(16,185,129,0.3);">✓</span>`
           }
-          <button class="btn btn-icon deck-options-btn" data-deck-id="${deck.id}" style="margin-left: 8px; font-size: 1.2rem; cursor: pointer; border: none; background: transparent;" aria-label="設定" title="設定">⚙️</button>
+          <button class="btn btn-icon deck-options-btn" data-deck-id="${deck.id}" style="margin-left: 8px; font-size: 1.2rem; cursor: pointer; border: none; background: transparent; vertical-align: middle;" aria-label="設定" title="設定">⚙️</button>
         </div>
       </div>
       <div class="deck-card-badges">
-        ${newCount > 0 ? `<span class="badge badge-new">新規 ${newCount}</span>` : ''}
-        ${learningCount > 0 ? `<span class="badge badge-learning">学習中 ${learningCount}</span>` : ''}
-        ${reviewCount > 0 ? `<span class="badge badge-review">復習 ${reviewCount}</span>` : ''}
+        <span class="badge badge-new">新規 ${newCount}</span>
+        <span class="badge badge-learning">学習中 ${learningCount}</span>
+        <span class="badge badge-review">復習 ${reviewCount}</span>
       </div>
       <div class="progress-bar">
         <div class="progress-bar-fill" style="width: ${progressPercent}%"></div>
@@ -175,20 +173,39 @@ function handleDeckClick(e) {
  * オプションモーダルを開く
  */
 async function openOptionsModal(deckId) {
+  if (!deckId) {
+    showToast('デッキIDが指定されていません', 'error');
+    return;
+  }
+
   currentOptionsDeckId = deckId;
   const modal = document.getElementById('deck-options-modal');
-  
+  if (!modal) {
+    showToast('設定モーダルが見つかりません', 'error');
+    return;
+  }
+
+  const newCardsInput = document.getElementById('option-new-cards');
+  const reviewCardsInput = document.getElementById('option-review-cards');
+  const reviewOrderSelect = document.getElementById('option-review-order');
+
+  if (!newCardsInput || !reviewCardsInput || !reviewOrderSelect) {
+    showToast('モーダル要素が見つかりません', 'error');
+    return;
+  }
+
   try {
     const options = await fetchDeckOptions(deckId);
-    document.getElementById('option-new-cards').value = options.max_new_cards;
-    document.getElementById('option-review-cards').value = options.max_review_cards;
-    document.getElementById('option-review-order').value = options.review_order;
-    
+    newCardsInput.value = options.max_new_cards;
+    reviewCardsInput.value = options.max_review_cards;
+    reviewOrderSelect.value = options.review_order;
+
     modal.classList.remove('hidden');
-    modal.classList.add('active'); // CSSアニメーション用
+    modal.classList.add('active');
   } catch (err) {
     showToast(`オプションの取得に失敗しました: ${err.message}`, 'error');
   }
+}
 }
 
 /**
