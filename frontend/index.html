@@ -65,13 +65,8 @@
             <section id="page-study" class="page-section">
                 <div class="study-header">
                     <button id="study-back-btn" class="btn-back">← 戻る</button>
-                    <h2 id="study-deck-name">デッキ名</h2>
-                    <div class="study-progress-container">
-                        <span id="study-progress-text" class="progress-text">0 / 0</span>
-                        <div class="progress-bar-bg">
-                            <div id="study-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
-                        </div>
-                    </div>
+                    <h2 id="study-deck-name" class="study-deck-name">デッキ名</h2>
+                    <span id="study-progress-text" class="study-progress-text">1 / 20</span>
                 </div>
 
                 <!-- カード表示セクション -->
@@ -95,7 +90,7 @@
                     </div>
                     
                     <div class="card-metadata-info">
-                        <span id="study-card-meta" class="badge">Basic</span>
+                        <span id="study-card-meta" class="badge study-card-meta">Basic</span>
                     </div>
 
                     <!-- 操作パネル -->
@@ -123,7 +118,7 @@
                 </div>
 
                 <!-- デッキ学習完了画面 -->
-                <div id="study-complete" class="study-complete-container">
+                <div id="study-complete" class="study-complete-container hidden">
                     <div class="complete-card card">
                         <div class="complete-icon">🎉</div>
                         <h3>素晴らしい！</h3>

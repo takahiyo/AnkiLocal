@@ -11,34 +11,12 @@
  */
 
 /* =============================================
-   学習画面コンテナ
+   学習画面セクション
    ============================================= */
 #page-study.active {
   display: flex;
   flex-direction: column;
   min-height: calc(100vh - var(--navbar-height));
-}
-
-.study-container {
-  max-width: 100%;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--spacing-lg);
-  flex: 1;
-  padding: 0 var(--spacing-lg);
-}
-
-/* =============================================
-   カード表示エリア
-   ============================================= */
-.study-card-area {
-  width: 100%;
-  position: relative;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
 }
 
 /* =============================================
@@ -49,9 +27,9 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: var(--spacing-md);
-  position: relative;
-  z-index: 10;
+  gap: var(--spacing-lg);
+  padding: var(--spacing-md) var(--spacing-lg);
+  flex-shrink: 0;
 }
 
 /* 戻るボタン */
@@ -73,14 +51,7 @@
   background: rgba(255, 255, 255, 0.05);
 }
 
-.study-header-info {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-  min-width: 0;
-}
-
+/* デッキ名 */
 .study-deck-name {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
@@ -88,12 +59,27 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
+/* 進捗テキスト */
 .study-progress-text {
   font-size: var(--font-size-sm);
   color: var(--text-secondary);
   flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* =============================================
+   カード表示エリア
+   ============================================= */
+.study-card-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--spacing-lg);
+  min-height: 0;
 }
 
 /* =============================================
@@ -101,6 +87,8 @@
    ============================================= */
 .study-card-container {
   width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
   flex: 1;
   min-height: 300px;
   perspective: 1000px;
@@ -151,7 +139,7 @@
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  padding: var(--spacing-2xl);
+  padding: var(--spacing-xl);
   text-align: center;
   overflow-wrap: break-word;
   word-break: break-word;
@@ -180,7 +168,7 @@
 
 /* カードテキスト */
 .study-card-text {
-  font-size: var(--font-size-2xl);
+  font-size: var(--font-size-lg);
   font-weight: var(--font-weight-medium);
   line-height: var(--line-height-relaxed);
   color: var(--text-primary);
@@ -197,13 +185,16 @@
   font-size: var(--font-size-xs);
   color: var(--text-muted);
   opacity: 0.7;
+  white-space: nowrap;
 }
 
 /* カードのサブテキスト（ノートタイプ等） */
+.card-metadata-info {
+  padding: var(--spacing-sm) 0;
+  text-align: center;
+}
+
 .study-card-meta {
-  position: absolute;
-  top: var(--spacing-md);
-  right: var(--spacing-md);
   font-size: var(--font-size-xs);
   color: var(--text-muted);
   background: rgba(255, 255, 255, 0.05);
@@ -249,7 +240,7 @@
 }
 
 /* =============================================
-   答えを見るボタン
+   操作パネル
    ============================================= */
 .study-controls {
   display: flex;
@@ -257,8 +248,13 @@
   align-items: center;
   gap: var(--spacing-md);
   width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: var(--spacing-md) 0 var(--spacing-lg);
+  flex-shrink: 0;
 }
 
+/* 答えを見るボタン */
 .btn-answer {
   width: 100%;
   max-width: 400px;
@@ -286,31 +282,39 @@
   width: 100%;
   max-width: 700px;
   grid-template-columns: repeat(4, 1fr);
-  justify-content: center;
 }
 
 .rating-buttons .btn-rating {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: var(--spacing-md) var(--spacing-lg);
-  min-height: 60px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: var(--spacing-sm) var(--spacing-xs);
+  min-height: 52px;
 }
 
 .rating-label {
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
 }
 
 .rate-interval {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-normal);
-  opacity: 0.9;
+  opacity: 0.85;
 }
 
 /* =============================================
    学習完了画面
    ============================================= */
+.study-complete-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .study-complete {
   text-align: center;
   padding: var(--spacing-3xl) var(--spacing-xl);
@@ -378,38 +382,47 @@
    ============================================= */
 @media (max-width: 768px) {
   .study-header {
-    flex-wrap: wrap;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  .study-card-area {
+    padding: 0 var(--spacing-md);
   }
 
   .study-card-container {
-    min-height: 200px;
+    min-height: 250px;
   }
 
   .study-card-front,
   .study-card-back {
-    min-height: 200px;
+    min-height: 250px;
     padding: var(--spacing-lg);
   }
 
   .study-card-text {
-    font-size: var(--font-size-xl);
+    font-size: var(--font-size-base);
   }
 
   .rating-buttons {
     gap: var(--spacing-xs);
+    max-width: 100%;
   }
 
   .rating-buttons .btn-rating {
-    min-width: 60px;
-    padding: var(--spacing-sm) var(--spacing-sm);
-    min-height: 50px;
+    min-height: 48px;
+    padding: var(--spacing-xs);
   }
 
-  .rate-label {
-    font-size: var(--font-size-sm);
+  .rating-label {
+    font-size: var(--font-size-xs);
   }
 
   .rate-interval {
-    font-size: var(--font-size-xs);
+    font-size: 0.7rem;
+  }
+
+  .btn-answer {
+    font-size: var(--font-size-base);
   }
 }
