@@ -168,14 +168,26 @@ function renderCardContent(card) {
 }
 
 /**
- * HTMLエスケープ
+ * HTMLエスケープ（<br>タグと\n改行を保持）
  * @param {string} str
  * @returns {string}
  */
 function escapeHtml(str) {
+  // <br>タグを一時プレースホルダーに置換
+  const brPlaceholder = '___BR_PLACEHOLDER___';
+  let processed = str.replace(/<br\s*\/?>/gi, brPlaceholder);
+  // \n改行を<br>に変換
+  processed = processed.replace(/\n/g, brPlaceholder);
+
+  // HTMLエスケープ
   const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  div.textContent = processed;
+  let escaped = div.innerHTML;
+
+  // プレースホルダーを実際の<br>に復元
+  escaped = escaped.replace(new RegExp(brPlaceholder, 'g'), '<br>');
+
+  return escaped;
 }
 
 /**

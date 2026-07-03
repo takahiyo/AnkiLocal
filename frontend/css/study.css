@@ -23,6 +23,14 @@
 }
 
 /* =============================================
+   カード表示エリア
+   ============================================= */
+.study-card-area {
+  width: 100%;
+  position: relative;
+}
+
+/* =============================================
    学習進捗ヘッダー
    ============================================= */
 .study-header {
@@ -30,6 +38,27 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
+  position: relative;
+  z-index: 10;
+}
+
+/* 戻るボタン */
+.btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm) var(--spacing-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  border-radius: var(--border-radius-md);
+  transition: all var(--transition-fast);
+  align-self: flex-start;
+}
+
+.btn-back:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .study-header-info {
@@ -57,6 +86,7 @@
   min-height: var(--card-min-height);
   perspective: 1000px;
   cursor: pointer;
+  position: relative;
 }
 
 .study-card-inner {
@@ -104,6 +134,14 @@
   text-align: center;
   overflow-wrap: break-word;
   word-break: break-word;
+  overflow: auto;
+}
+
+/* カードコンテンツエリア */
+.card-content {
+  width: 100%;
+  max-height: calc(var(--card-min-height) - 80px);
+  overflow-y: auto;
 }
 
 /* 表面 */
@@ -123,6 +161,18 @@
   line-height: var(--line-height-relaxed);
   color: var(--text-primary);
   max-width: 100%;
+  white-space: pre-wrap;
+}
+
+/* カードフッターヒント */
+.card-footer-tip {
+  position: absolute;
+  bottom: var(--spacing-md);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  opacity: 0.7;
 }
 
 /* カードのサブテキスト（ノートタイプ等） */
@@ -177,7 +227,15 @@
 /* =============================================
    答えを見るボタン
    ============================================= */
-.show-answer-btn {
+.study-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-md);
+  width: 100%;
+}
+
+.btn-answer {
   width: 100%;
   max-width: 400px;
   padding: var(--spacing-md) var(--spacing-xl);
@@ -190,7 +248,7 @@
   transition: all var(--transition-base);
 }
 
-.show-answer-btn:hover {
+.btn-answer:hover {
   box-shadow: var(--shadow-glow-strong);
   transform: translateY(-2px);
 }

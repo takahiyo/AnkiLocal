@@ -88,11 +88,24 @@ export function renderClozeAnswer(text, targetIndex) {
 /**
  * HTMLエスケープ処理。
  * XSS防止のため、ユーザー入力テキストを安全にHTMLに埋め込む。
+ * <br>タグと\n改行を保持する。
  * @param {string} str - エスケープ対象の文字列
  * @returns {string} エスケープ済みの文字列
  */
 function escapeHtml(str) {
+  // <br>タグを一時プレースホルダーに置換
+  const brPlaceholder = '___BR_PLACEHOLDER___';
+  let processed = str.replace(/<br\s*\/?>/gi, brPlaceholder);
+  // \n改行を<br>に変換
+  processed = processed.replace(/\n/g, brPlaceholder);
+
+  // HTMLエスケープ
   const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  div.textContent = processed;
+  let escaped = div.innerHTML;
+
+  // プレースホルダーを実際の<br>に復元
+  escaped = escaped.replace(new RegExp(brPlaceholder, 'g'), '<br>');
+
+  return escaped;
 }
