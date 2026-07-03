@@ -206,7 +206,6 @@ async function openOptionsModal(deckId) {
     showToast(`オプションの取得に失敗しました: ${err.message}`, 'error');
   }
 }
-}
 
 /**
  * オプションモーダルを閉じる
