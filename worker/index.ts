@@ -162,8 +162,11 @@ app.post("/import", async (c) => {
 
     let cardsCreated = 0;
     
-    // 3. 100件ずつマルチ行INSERTを実行してAPIサブリクエスト制限を回避
-    const BATCH_SIZE = 100;
+    // 3. マルチ行INSERTステートメントを準備（10件ずつ = 90バインド変数でD1上限を回避）
+    //    全ステートメントを db.batch() で一括送信し、サブリクエストを1回に抑える
+    const BATCH_SIZE = 10;
+    const insertStmts: ReturnType<typeof db.prepare>[] = [];
+    
     for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
       const chunk = parsedCards.slice(i, i + BATCH_SIZE);
       const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
@@ -184,28 +187,46 @@ app.post("/import", async (c) => {
         );
       }
       
-      const insertResult = await db.prepare(
-        `INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`
-      ).bind(...params).run();
-      
-      if (insertResult.meta && insertResult.meta.changes) {
-        cardsCreated += insertResult.meta.changes;
+      insertStmts.push(
+        db.prepare(
+          `INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`
+        ).bind(...params)
+      );
+    }
+    
+    // card_states の一括作成もバッチに含める
+    insertStmts.push(
+      db.prepare("INSERT OR IGNORE INTO card_states (card_id) SELECT id FROM cards")
+    );
+    
+    // 全ステートメントを1回のバッチ（=1サブリクエスト）で実行
+    const batchResults = await db.batch(insertStmts);
+    // 最後の1つは card_states なので除外してカウント
+    for (let r = 0; r < batchResults.length - 1; r++) {
+      if (batchResults[r].meta && batchResults[r].meta.changes) {
+        cardsCreated += batchResults[r].meta.changes;
       }
     }
 
-    // 5. 新規カードに対する card_states の初期レコードを一括作成
-    await db.prepare("INSERT OR IGNORE INTO card_states (card_id) SELECT id FROM cards").run();
-
     const skipped = parsedCards.length - cardsCreated;
 
-    // フロントエンド (import.js) の求めるレスポンス形式にマッピング
-    const importedDecks = await Promise.all(
-      uniqueDeckNames.map(async (name) => {
-        const deckId = deckCache[name];
-        const counts = await getDeckCounts(db, deckId);
-        return { name, card_count: counts.total };
-      })
-    );
+    // 5. デッキごとのカード数を一括取得（サブリクエスト節約）
+    const { results: deckCountRows } = await db.prepare(`
+      SELECT c.deck_id, COUNT(*) as total
+      FROM cards c
+      WHERE c.deck_id IN (${uniqueDeckNames.map(() => '?').join(',')})
+      GROUP BY c.deck_id
+    `).bind(...uniqueDeckNames.map(n => deckCache[n])).all<{ deck_id: number; total: number }>();
+    
+    const deckCountMap: Record<number, number> = {};
+    for (const row of deckCountRows) {
+      deckCountMap[row.deck_id] = row.total;
+    }
+    
+    const importedDecks = uniqueDeckNames.map(name => ({
+      name,
+      card_count: deckCountMap[deckCache[name]] || 0,
+    }));
 
     return c.json({
       success: true,
