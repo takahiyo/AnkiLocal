@@ -9,7 +9,8 @@
   display: flex;
   flex-direction: column;
   padding-top: calc(var(--navbar-height) + var(--spacing-lg));
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* =============================================
@@ -125,7 +126,7 @@
   box-shadow: var(--shadow-card);
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   padding: var(--spacing-2xl) var(--spacing-xl);
   text-align: center;
@@ -139,7 +140,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   overflow-y: auto;
 }
 
