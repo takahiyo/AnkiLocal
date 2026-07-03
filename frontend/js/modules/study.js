@@ -350,6 +350,12 @@ function bindEvents() {
   if (backBtn) {
     backBtn.addEventListener('click', () => navigateTo('/decks'));
   }
+  
+  // 完了画面のデッキ一覧に戻るボタン
+  const completeBackBtn = $('study-complete-back-btn');
+  if (completeBackBtn) {
+    completeBackBtn.addEventListener('click', () => navigateTo('/decks'));
+  }
 
   // キーボードショートカット
   document.addEventListener('keydown', handleKeyboard);

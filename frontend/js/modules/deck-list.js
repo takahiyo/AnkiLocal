@@ -10,8 +10,10 @@
  */
 
 import { DECK_LIST_IDS } from '../constants/index.js';
-import { fetchDecks } from '../services/api.js';
+import { fetchDecks, fetchDeckOptions, updateDeckOptions } from '../services/api.js';
 import { navigateTo } from './router.js';
+
+let currentOptionsDeckId = null;
 
 /**
  * トースト通知を表示するユーティリティ。
@@ -56,6 +58,7 @@ function renderDeckCard(deck) {
             ? `<span class="badge badge-review" style="font-size: 0.9rem; padding: 4px 12px;">${studyReady}</span>`
             : `<span class="badge" style="background: rgba(16,185,129,0.15); color: var(--color-success); border: 1px solid rgba(16,185,129,0.3);">✓</span>`
           }
+          <button class="btn btn-icon deck-options-btn" data-deck-id="${deck.id}" style="margin-left: 8px; font-size: 1.2rem; cursor: pointer; border: none; background: transparent;" aria-label="設定" title="設定">⚙️</button>
         </div>
       </div>
       <div class="deck-card-badges">
@@ -150,6 +153,14 @@ export async function loadDeckList() {
  * @param {MouseEvent} e
  */
 function handleDeckClick(e) {
+  // オプションボタンのクリック
+  const optionsBtn = e.target.closest('.deck-options-btn');
+  if (optionsBtn) {
+    e.stopPropagation(); // 学習開始への遷移を防ぐ
+    openOptionsModal(optionsBtn.dataset.deckId);
+    return;
+  }
+
   // 学習開始ボタン、またはカード全体のクリックを処理
   const btn = e.target.closest('.study-start-btn');
   const card = e.target.closest('.deck-card');
@@ -161,9 +172,76 @@ function handleDeckClick(e) {
 }
 
 /**
+ * オプションモーダルを開く
+ */
+async function openOptionsModal(deckId) {
+  currentOptionsDeckId = deckId;
+  const modal = document.getElementById('deck-options-modal');
+  
+  try {
+    const options = await fetchDeckOptions(deckId);
+    document.getElementById('option-new-cards').value = options.max_new_cards;
+    document.getElementById('option-review-cards').value = options.max_review_cards;
+    document.getElementById('option-review-order').value = options.review_order;
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('active'); // CSSアニメーション用
+  } catch (err) {
+    showToast(`オプションの取得に失敗しました: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * オプションモーダルを閉じる
+ */
+function closeOptionsModal() {
+  const modal = document.getElementById('deck-options-modal');
+  if (modal) {
+    modal.classList.remove('active');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+  }
+  currentOptionsDeckId = null;
+}
+
+/**
+ * オプションを保存する
+ */
+async function saveOptions() {
+  if (!currentOptionsDeckId) return;
+  
+  const maxNew = parseInt(document.getElementById('option-new-cards').value, 10);
+  const maxRev = parseInt(document.getElementById('option-review-cards').value, 10);
+  const order = document.getElementById('option-review-order').value;
+  
+  try {
+    await updateDeckOptions(currentOptionsDeckId, {
+      max_new_cards: isNaN(maxNew) ? 20 : maxNew,
+      max_review_cards: isNaN(maxRev) ? 100 : maxRev,
+      review_order: order
+    });
+    showToast('オプションを保存しました', 'success');
+    closeOptionsModal();
+  } catch (err) {
+    showToast(`オプションの保存に失敗しました: ${err.message}`, 'error');
+  }
+}
+
+/**
  * デッキ一覧モジュールを初期化する。
  */
 export function init() {
-  // 初回読み込みはルーター経由で行われるため、ここでは何もしない
-  // loadDeckList() は onRouteChange コールバックから呼ばれる
+  // モーダルイベントのバインド
+  const closeBtn = document.getElementById('deck-options-close');
+  const saveBtn = document.getElementById('deck-options-save');
+  const modalOverlay = document.getElementById('deck-options-modal');
+  
+  if (closeBtn) closeBtn.addEventListener('click', closeOptionsModal);
+  if (saveBtn) saveBtn.addEventListener('click', saveOptions);
+  
+  // 背景クリックで閉じる
+  if (modalOverlay) {
+    modalOverlay.addEventListener('click', (e) => {
+      if (e.target === modalOverlay) closeOptionsModal();
+    });
+  }
 }

@@ -22,6 +22,9 @@ export const API = Object.freeze({
   /** POST: カードレビュー送信 body:{rating:1-4} → {next_review_at, interval_days, ease_factor} */
   REVIEW: (cardId) => `/api/cards/${cardId}/review`,
 
+  /** GET/POST: デッキオプション設定 */
+  OPTIONS: (deckId) => `/api/decks/${deckId}/options`,
+
   /** GET: 全体統計 → {total_cards, new_count, learning_count, review_count, mastered_count, decks:[...], recent_reviews:[...]} */
   STATS: '/api/stats',
 

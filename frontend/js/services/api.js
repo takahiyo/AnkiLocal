@@ -176,3 +176,9 @@ export const importFile = (file) => {
   formData.append('file', file);
   return apiPostFormData(API.IMPORT, formData);
 };
+
+/** デッキオプションを取得 */
+export const fetchDeckOptions = (deckId) => apiGet(API.OPTIONS(deckId));
+
+/** デッキオプションを更新 */
+export const updateDeckOptions = (deckId, options) => apiPost(API.OPTIONS(deckId), options);

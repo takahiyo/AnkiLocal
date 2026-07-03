@@ -42,3 +42,12 @@ CREATE TABLE IF NOT EXISTS review_logs (
     reviewed_at TEXT    NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
 );
+
+-- デッキオプションテーブル
+CREATE TABLE IF NOT EXISTS deck_options (
+    deck_id          INTEGER PRIMARY KEY,
+    max_new_cards    INTEGER NOT NULL DEFAULT 20,
+    max_review_cards INTEGER NOT NULL DEFAULT 100,
+    review_order     TEXT NOT NULL DEFAULT 'random',
+    FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
+);

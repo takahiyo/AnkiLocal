@@ -31,12 +31,22 @@ app.use("*", async (c, next) => {
     return c.json({ error: "認証エラー: 無効なトークンです" }, 401);
   }
 
-  // 自動マイグレーション (lapsesカラムの追加)
+  // 自動マイグレーション (lapsesカラムの追加等)
   try {
     await c.env.DB.prepare("ALTER TABLE card_states ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0").run();
-  } catch (e) {
-    // カラムが既に存在する場合はエラーになるため無視
-  }
+  } catch (e) {}
+
+  try {
+    await c.env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS deck_options (
+          deck_id          INTEGER PRIMARY KEY,
+          max_new_cards    INTEGER NOT NULL DEFAULT 20,
+          max_review_cards INTEGER NOT NULL DEFAULT 100,
+          review_order     TEXT NOT NULL DEFAULT 'random',
+          FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
+      )
+    `).run();
+  } catch (e) {}
 
   await next();
 });
@@ -252,9 +262,64 @@ app.post("/import", async (c) => {
   }
 });
 
-/**
- * GET: 学習対象カードの取得
- */
+// ==========================================
+// 6. デッキオプション (Options)
+// ==========================================
+
+// デッキオプション取得
+app.get("/decks/:deckId/options", async (c) => {
+  const db: D1Database = c.env.DB;
+  const deckIdStr = c.req.param("deckId");
+  const deckId = parseInt(deckIdStr, 10);
+
+  if (isNaN(deckId)) return c.json({ error: "無効なデッキIDです" }, 400);
+
+  let options = await db
+    .prepare("SELECT max_new_cards, max_review_cards, review_order FROM deck_options WHERE deck_id = ?")
+    .bind(deckId)
+    .first<{ max_new_cards: number; max_review_cards: number; review_order: string }>();
+
+  if (!options) {
+    // デフォルト値
+    options = {
+      max_new_cards: 20,
+      max_review_cards: 100,
+      review_order: 'random'
+    };
+  }
+
+  return c.json(options);
+});
+
+// デッキオプション更新
+app.post("/decks/:deckId/options", async (c) => {
+  const db: D1Database = c.env.DB;
+  const deckIdStr = c.req.param("deckId");
+  const deckId = parseInt(deckIdStr, 10);
+
+  if (isNaN(deckId)) return c.json({ error: "無効なデッキIDです" }, 400);
+
+  const body = await c.req.json();
+  const maxNew = typeof body.max_new_cards === 'number' ? body.max_new_cards : 20;
+  const maxRev = typeof body.max_review_cards === 'number' ? body.max_review_cards : 100;
+  const order = body.review_order === 'sequential' ? 'sequential' : 'random';
+
+  await db.prepare(`
+    INSERT INTO deck_options (deck_id, max_new_cards, max_review_cards, review_order)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(deck_id) DO UPDATE SET
+      max_new_cards = excluded.max_new_cards,
+      max_review_cards = excluded.max_review_cards,
+      review_order = excluded.review_order
+  `).bind(deckId, maxNew, maxRev, order).run();
+
+  return c.json({ success: true });
+});
+
+// ==========================================
+// 7. 出題 (Study)
+// ==========================================
+
 app.get("/decks/:deckId/study", async (c) => {
   const db = c.env.DB;
   const deckId = parseInt(c.req.param("deckId"), 10);
@@ -271,41 +336,53 @@ app.get("/decks/:deckId/study", async (c) => {
 
     const cards: any[] = [];
 
-    // 1. new カード (最大20件)
-    const newBatchSize = 20;
-    const { results: newCards } = await db
-      .prepare(
-        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
-         FROM cards c
-         JOIN card_states cs ON c.id = cs.card_id
-         WHERE c.deck_id = ? AND cs.status = 'new'
-         ORDER BY c.id
-         LIMIT ?`
-      )
-      .bind(deckId, newBatchSize)
-      .all();
-    cards.push(...newCards);
+    // オプションの取得
+    let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order FROM deck_options WHERE deck_id = ?").bind(deckId).first<{max_new_cards: number, max_review_cards: number, review_order: string}>();
+    if (!options) {
+      options = { max_new_cards: 20, max_review_cards: 100, review_order: 'random' };
+    }
 
-    // 2. review / learning カード (復習期限到来, 最大100件)
-    const reviewBatchSize = 100;
-    const { results: reviewCards } = await db
-      .prepare(
-        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
-         FROM cards c
-         JOIN card_states cs ON c.id = cs.card_id
-         WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
-           AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)
-         ORDER BY cs.next_review_at
-         LIMIT ?`
-      )
-      .bind(deckId, nowIso, reviewBatchSize)
-      .all();
-    cards.push(...reviewCards);
+    // 1. new カード
+    const newBatchSize = options.max_new_cards;
+    if (newBatchSize > 0) {
+      const { results: newCards } = await db
+        .prepare(
+          `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
+           FROM cards c
+           JOIN card_states cs ON c.id = cs.card_id
+           WHERE c.deck_id = ? AND cs.status = 'new'
+           ORDER BY c.id
+           LIMIT ?`
+        )
+        .bind(deckId, newBatchSize)
+        .all();
+      cards.push(...newCards);
+    }
 
-    // シャッフル (Fisher-Yates)
-    for (let i = cards.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [cards[i], cards[j]] = [cards[j], cards[i]];
+    // 2. review / learning カード
+    const reviewBatchSize = options.max_review_cards;
+    if (reviewBatchSize > 0) {
+      const { results: reviewCards } = await db
+        .prepare(
+          `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
+           FROM cards c
+           JOIN card_states cs ON c.id = cs.card_id
+           WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
+             AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)
+           ORDER BY cs.next_review_at
+           LIMIT ?`
+        )
+        .bind(deckId, nowIso, reviewBatchSize)
+        .all();
+      cards.push(...reviewCards);
+    }
+
+    // シャッフルまたは順次並び替え
+    if (options.review_order === 'random') {
+      for (let i = cards.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [cards[i], cards[j]] = [cards[j], cards[i]];
+      }
     }
 
     // レスポンスマッピング
