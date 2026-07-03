@@ -24,20 +24,20 @@
 
     <div id="app" class="app-container">
         <!-- ナビゲーションバー -->
-        <header class="app-header">
-            <div class="header-logo">
-                <span class="logo-icon">⚡</span>
-                <span class="logo-text">Anki<span class="logo-highlight">Local</span></span>
-            </div>
-            <nav class="app-nav">
+        <header class="navbar">
+            <a href="#/" class="navbar-brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-text">Anki<span class="logo-highlight">Local</span></span>
+            </a>
+            <nav class="navbar-nav">
                 <a href="#/decks" id="nav-decks" class="nav-link active">
                     <span class="nav-icon">📚</span> デッキ
                 </a>
-                <a href="#/stats" id="nav-stats" class="nav-link">
-                    <span class="nav-icon">📊</span> 統計
-                </a>
                 <a href="#/import" id="nav-import" class="nav-link">
                     <span class="nav-icon">📥</span> インポート
+                </a>
+                <a href="#/stats" id="nav-stats" class="nav-link">
+                    <span class="nav-icon">📊</span> 統計
                 </a>
             </nav>
         </header>
@@ -78,16 +78,16 @@
                 <div id="study-card-section" class="study-card-area">
                     <div id="study-card-container" class="study-card">
                         <!-- カード表面 -->
-                        <div class="study-card-face face-front">
+                        <div class="study-card-front">
                             <div class="card-content">
-                                <div id="study-card-front-text" class="card-text">問題文</div>
+                                <div id="study-card-front-text" class="study-card-text">問題文</div>
                             </div>
                             <div class="card-footer-tip">クリックまたはスペースキーで解答を表示</div>
                         </div>
                         <!-- カード裏面 -->
-                        <div class="study-card-face face-back">
+                        <div class="study-card-back">
                             <div class="card-content">
-                                <div id="study-card-back-text" class="card-text">解答</div>
+                                <div id="study-card-back-text" class="study-card-text">解答</div>
                             </div>
                         </div>
                     </div>

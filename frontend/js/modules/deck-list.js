@@ -95,11 +95,13 @@ function escapeHtml(str) {
 export async function loadDeckList() {
   const grid = document.getElementById(DECK_LIST_IDS.GRID);
   const loading = document.getElementById(DECK_LIST_IDS.LOADING);
+  const container = document.getElementById(DECK_LIST_IDS.CONTAINER);
 
   if (!grid) return;
 
   // ローディング表示
-  if (loading) loading.classList.remove('hidden');
+  if (loading) loading.style.display = 'flex';
+  if (container) container.style.display = 'none';
   grid.innerHTML = '';
 
   try {
@@ -137,7 +139,8 @@ export async function loadDeckList() {
       </div>
     `;
   } finally {
-    if (loading) loading.classList.add('hidden');
+    if (loading) loading.style.display = 'none';
+    if (container) container.style.display = 'block';
   }
 }
 

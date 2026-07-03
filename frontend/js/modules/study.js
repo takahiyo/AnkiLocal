@@ -10,7 +10,7 @@
  */
 
 import { STUDY_IDS, NOTE_TYPES } from '../constants/index.js';
-import { fetchStudyCards, submitReview } from '../services/api.js';
+import { fetchStudyCards, submitReview, fetchDecks } from '../services/api.js';
 import { renderClozeQuestion, renderClozeAnswer } from '../services/cloze.js';
 import { navigateTo } from './router.js';
 
@@ -58,6 +58,18 @@ export async function startStudySession(deckId) {
 
   try {
     _cards = await fetchStudyCards(deckId);
+
+    // デッキ名を取得して表示
+    try {
+      const decks = await fetchDecks();
+      const deck = decks.find(d => String(d.id) === String(deckId));
+      if (deck) {
+        const deckNameEl = $(STUDY_IDS.DECK_NAME);
+        if (deckNameEl) deckNameEl.textContent = deck.name;
+      }
+    } catch (e) {
+      console.warn("Could not fetch deck name", e);
+    }
 
     if (!_cards || _cards.length === 0) {
       showComplete();

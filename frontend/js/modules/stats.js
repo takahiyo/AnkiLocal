@@ -34,9 +34,10 @@ function $(id) {
  */
 export async function loadStats() {
   const loading = $(STATS_IDS.LOADING);
-  const summaryGrid = $(STATS_IDS.SUMMARY_GRID);
+  const container = $('stats-container'); // Need to map this correctly, but string 'stats-container' works since index.html uses it.
 
-  if (loading) loading.classList.remove('hidden');
+  if (loading) loading.style.display = 'flex';
+  if (container) container.style.display = 'none';
 
   try {
     const stats = await fetchStats();
@@ -46,7 +47,8 @@ export async function loadStats() {
   } catch (err) {
     showToast(`統計の取得に失敗しました: ${err.message}`, 'error');
   } finally {
-    if (loading) loading.classList.add('hidden');
+    if (loading) loading.style.display = 'none';
+    if (container) container.style.display = 'block';
   }
 }
 

@@ -2447,7 +2447,7 @@ app.get("/decks", async (c) => {
 app.post("/import", async (c) => {
   const db = c.env.DB;
   try {
-    const formData = await c.req.formData();
+    const formData = await c.req.raw.formData();
     const file = formData.get("file");
     if (!file) {
       return c.json({ error: "\u30D5\u30A1\u30A4\u30EB\u304C\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u3055\u308C\u3066\u3044\u307E\u305B\u3093" }, 400);
@@ -2464,30 +2464,36 @@ app.post("/import", async (c) => {
     }
     const deckCache = {};
     const decksCreated = [];
-    let cardsCreated = 0;
-    let skipped = 0;
     const uniqueNotes = /* @__PURE__ */ new Set();
-    for (const card of parsedCards) {
-      uniqueNotes.add(card.guid);
-      if (!deckCache[card.deck_name]) {
-        const existingDeck = await db.prepare("SELECT id FROM decks WHERE name = ?").bind(card.deck_name).first();
-        if (existingDeck) {
-          deckCache[card.deck_name] = existingDeck.id;
-        } else {
-          const insertDeck = await db.prepare("INSERT INTO decks (name) VALUES (?)").bind(card.deck_name).run();
-          const newId = insertDeck.meta.last_row_id;
-          deckCache[card.deck_name] = newId;
-          decksCreated.push(card.deck_name);
+    const uniqueDeckNames = Array.from(new Set(parsedCards.map((c2) => c2.deck_name)));
+    const existingDecks = await db.prepare("SELECT id, name FROM decks").all();
+    for (const d of existingDecks.results) {
+      deckCache[d.name] = d.id;
+    }
+    const missingDecks = uniqueDeckNames.filter((name) => !deckCache[name]);
+    if (missingDecks.length > 0) {
+      const deckPlaceholders = missingDecks.map(() => "(?)").join(", ");
+      await db.prepare(`INSERT OR IGNORE INTO decks (name) VALUES ${deckPlaceholders}`).bind(...missingDecks).run();
+      const newDecks = await db.prepare("SELECT id, name FROM decks").all();
+      for (const d of newDecks.results) {
+        deckCache[d.name] = d.id;
+        if (missingDecks.includes(d.name)) {
+          decksCreated.push(d.name);
         }
       }
-      const deckId = deckCache[card.deck_name];
-      try {
-        const insertCard = await db.prepare(
-          `INSERT INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(
+    }
+    let cardsCreated = 0;
+    const BATCH_SIZE = 10;
+    const insertStmts = [];
+    for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
+      const chunk = parsedCards.slice(i, i + BATCH_SIZE);
+      const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+      const params = [];
+      for (const card of chunk) {
+        uniqueNotes.add(card.guid);
+        params.push(
           card.guid,
-          deckId,
+          deckCache[card.deck_name],
           card.note_type,
           card.front,
           card.back,
@@ -2495,21 +2501,38 @@ app.post("/import", async (c) => {
           card.cloze_count,
           card.cloze_index,
           card.is_reversed ? 1 : 0
-        ).run();
-        const cardId = insertCard.meta.last_row_id;
-        await db.prepare("INSERT INTO card_states (card_id) VALUES (?)").bind(cardId).run();
-        cardsCreated++;
-      } catch (err) {
-        skipped++;
+        );
+      }
+      insertStmts.push(
+        db.prepare(
+          `INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`
+        ).bind(...params)
+      );
+    }
+    insertStmts.push(
+      db.prepare("INSERT OR IGNORE INTO card_states (card_id) SELECT id FROM cards")
+    );
+    const batchResults = await db.batch(insertStmts);
+    for (let r = 0; r < batchResults.length - 1; r++) {
+      if (batchResults[r].meta && batchResults[r].meta.changes) {
+        cardsCreated += batchResults[r].meta.changes;
       }
     }
-    const importedDecks = await Promise.all(
-      decksCreated.map(async (name) => {
-        const deckRow = await db.prepare("SELECT id FROM decks WHERE name = ?").bind(name).first();
-        const counts = deckRow ? await getDeckCounts(db, deckRow.id) : { total: 0 };
-        return { name, card_count: counts.total };
-      })
-    );
+    const skipped = parsedCards.length - cardsCreated;
+    const { results: deckCountRows } = await db.prepare(`
+      SELECT c.deck_id, COUNT(*) as total
+      FROM cards c
+      WHERE c.deck_id IN (${uniqueDeckNames.map(() => "?").join(",")})
+      GROUP BY c.deck_id
+    `).bind(...uniqueDeckNames.map((n) => deckCache[n])).all();
+    const deckCountMap = {};
+    for (const row of deckCountRows) {
+      deckCountMap[row.deck_id] = row.total;
+    }
+    const importedDecks = uniqueDeckNames.map((name) => ({
+      name,
+      card_count: deckCountMap[deckCache[name]] || 0
+    }));
     return c.json({
       success: true,
       message: `\u30A4\u30F3\u30DD\u30FC\u30C8\u5B8C\u4E86: ${cardsCreated}\u679A\u306E\u30AB\u30FC\u30C9\u3092\u4F5C\u6210\u3057\u307E\u3057\u305F\u3002`,
@@ -2522,6 +2545,7 @@ app.post("/import", async (c) => {
       decks: importedDecks
     });
   } catch (err) {
+    console.error("Import error:", err.stack || err);
     return c.json({ error: `\u30A4\u30F3\u30DD\u30FC\u30C8\u30A8\u30E9\u30FC: ${err.message}` }, 500);
   }
 });
