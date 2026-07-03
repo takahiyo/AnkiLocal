@@ -14,6 +14,7 @@ import { fetchDecks, fetchDeckOptions, updateDeckOptions } from '../services/api
 import { navigateTo } from './router.js';
 
 let currentOptionsDeckId = null;
+let closeModalTimer = null;
 
 /**
  * トースト通知を表示するユーティリティ。
@@ -105,6 +106,9 @@ export async function loadDeckList() {
   if (container) container.style.display = 'none';
   grid.innerHTML = '';
 
+  // 重複リスナーを防止（古いリスナーを削除してから追加）
+  grid.removeEventListener('click', handleDeckClick);
+
   try {
     const decks = await fetchDecks();
 
@@ -195,6 +199,8 @@ async function openOptionsModal(deckId) {
   }
 
   try {
+    if (closeModalTimer) clearTimeout(closeModalTimer);
+
     const options = await fetchDeckOptions(deckId);
     newCardsInput.value = options.max_new_cards;
     reviewCardsInput.value = options.max_review_cards;
@@ -214,7 +220,8 @@ function closeOptionsModal() {
   const modal = document.getElementById('deck-options-modal');
   if (modal) {
     modal.classList.remove('active');
-    setTimeout(() => modal.classList.add('hidden'), 300);
+    if (closeModalTimer) clearTimeout(closeModalTimer);
+    closeModalTimer = setTimeout(() => modal.classList.add('hidden'), 300);
   }
   currentOptionsDeckId = null;
 }
