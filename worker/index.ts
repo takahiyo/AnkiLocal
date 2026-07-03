@@ -31,6 +31,13 @@ app.use("*", async (c, next) => {
     return c.json({ error: "認証エラー: 無効なトークンです" }, 401);
   }
 
+  // 自動マイグレーション (lapsesカラムの追加)
+  try {
+    await c.env.DB.prepare("ALTER TABLE card_states ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0").run();
+  } catch (e) {
+    // カラムが既に存在する場合はエラーになるため無視
+  }
+
   await next();
 });
 
@@ -264,54 +271,41 @@ app.get("/decks/:deckId/study", async (c) => {
 
     const cards: any[] = [];
 
-    // 1. new カード
+    // 1. new カード (最大20件)
+    const newBatchSize = 20;
     const { results: newCards } = await db
       .prepare(
-        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.status, cs.next_review_at
+        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
          FROM cards c
          JOIN card_states cs ON c.id = cs.card_id
          WHERE c.deck_id = ? AND cs.status = 'new'
          ORDER BY c.id
          LIMIT ?`
       )
-      .bind(deckId, batchSize)
+      .bind(deckId, newBatchSize)
       .all();
     cards.push(...newCards);
 
-    // 2. learning カード
-    if (cards.length < batchSize) {
-      const remaining = batchSize - cards.length;
-      const { results: learningCards } = await db
-        .prepare(
-          `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.status, cs.next_review_at
-           FROM cards c
-           JOIN card_states cs ON c.id = cs.card_id
-           WHERE c.deck_id = ? AND cs.status = 'learning'
-             AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)
-           ORDER BY cs.next_review_at
-           LIMIT ?`
-        )
-        .bind(deckId, nowIso, remaining)
-        .all();
-      cards.push(...learningCards);
-    }
+    // 2. review / learning カード (復習期限到来, 最大100件)
+    const reviewBatchSize = 100;
+    const { results: reviewCards } = await db
+      .prepare(
+        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
+         FROM cards c
+         JOIN card_states cs ON c.id = cs.card_id
+         WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
+           AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)
+         ORDER BY cs.next_review_at
+         LIMIT ?`
+      )
+      .bind(deckId, nowIso, reviewBatchSize)
+      .all();
+    cards.push(...reviewCards);
 
-    // 3. review カード (復習期限到来)
-    if (cards.length < batchSize) {
-      const remaining = batchSize - cards.length;
-      const { results: reviewCards } = await db
-        .prepare(
-          `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.status, cs.next_review_at
-           FROM cards c
-           JOIN card_states cs ON c.id = cs.card_id
-           WHERE c.deck_id = ? AND cs.status = 'review'
-             AND cs.next_review_at <= ?
-           ORDER BY cs.next_review_at
-           LIMIT ?`
-        )
-        .bind(deckId, nowIso, remaining)
-        .all();
-      cards.push(...reviewCards);
+    // シャッフル (Fisher-Yates)
+    for (let i = cards.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cards[i], cards[j]] = [cards[j], cards[i]];
     }
 
     // レスポンスマッピング
@@ -330,6 +324,7 @@ app.get("/decks/:deckId/study", async (c) => {
         ease_factor: row.ease_factor,
         interval_days: row.interval_days,
         repetitions: row.repetitions,
+        lapses: row.lapses,
         status: row.status,
         next_review_at: row.next_review_at,
       }))
@@ -354,9 +349,9 @@ app.post("/cards/:cardId/review", async (c) => {
     }
 
     const stateRow = await db
-      .prepare("SELECT ease_factor, interval_days, repetitions, status FROM card_states WHERE card_id = ?")
+      .prepare("SELECT ease_factor, interval_days, repetitions, lapses, status FROM card_states WHERE card_id = ?")
       .bind(cardId)
-      .first<{ ease_factor: number; interval_days: number; repetitions: number; status: string }>();
+      .first<{ ease_factor: number; interval_days: number; repetitions: number; lapses: number; status: string }>();
 
     if (!stateRow) {
       return c.json({ error: "カードが見つかりません" }, 404);
@@ -367,6 +362,7 @@ app.post("/cards/:cardId/review", async (c) => {
         easeFactor: stateRow.ease_factor,
         intervalDays: stateRow.interval_days,
         repetitions: stateRow.repetitions,
+        lapses: stateRow.lapses,
         status: stateRow.status,
       },
       rating as Rating
@@ -379,13 +375,14 @@ app.post("/cards/:cardId/review", async (c) => {
     await db.batch([
       db.prepare(
         `UPDATE card_states
-         SET ease_factor = ?, interval_days = ?, repetitions = ?,
+         SET ease_factor = ?, interval_days = ?, repetitions = ?, lapses = ?,
              next_review_at = ?, last_reviewed_at = ?, status = ?
          WHERE card_id = ?`
       ).bind(
         result.easeFactor,
         result.intervalDays,
         result.repetitions,
+        result.lapses,
         nextReviewIso,
         nowIso,
         result.status,
@@ -400,6 +397,7 @@ app.post("/cards/:cardId/review", async (c) => {
       ease_factor: result.easeFactor,
       interval_days: result.intervalDays,
       repetitions: result.repetitions,
+      lapses: result.lapses,
       next_review_at: nextReviewIso,
       status: result.status,
     });

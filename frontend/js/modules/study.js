@@ -94,9 +94,21 @@ function showCard() {
   const card = _cards[_currentIndex];
   _isFlipped = false;
 
-  // カードコンテナのフリップ状態をリセット
+  // カードコンテナのフリップ状態をリセットし、横回転アニメーションを付与
   const container = $(STUDY_IDS.CARD_CONTAINER);
-  if (container) container.classList.remove('flipped');
+  if (container) {
+    if (container.classList.contains('flipped')) {
+      container.classList.remove('flipped');
+      // 次のカードアニメーション
+      container.classList.remove('next-card-anim');
+      // リフローを強制してアニメーションを再トリガー
+      void container.offsetWidth;
+      container.classList.add('next-card-anim');
+      setTimeout(() => {
+        container.classList.remove('next-card-anim');
+      }, 400); // CSSの.4sに合わせる
+    }
+  }
 
   // ノートタイプに応じたテキスト生成
   const { frontHtml, backHtml, metaText } = renderCardContent(card);
@@ -174,9 +186,12 @@ function flipCard() {
 
   _isFlipped = true;
 
-  // 3Dフリップアニメーション発動
+  // 3Dフリップアニメーション発動 (縦)
   const container = $(STUDY_IDS.CARD_CONTAINER);
   if (container) container.classList.add('flipped');
+
+  // 次回予定時間の計算と表示
+  updateIntervalDisplay(_cards[_currentIndex]);
 
   // ボタン切替: 答えを見る → 評価ボタン
   const showAnswerBtn = $(STUDY_IDS.SHOW_ANSWER_BTN);
@@ -201,6 +216,17 @@ async function handleRating(rating) {
 
   try {
     await submitReview(card.id, rating);
+    
+    // Again(1)の場合はキューの末尾に再追加 (今日中に再出題)
+    if (rating === 1) {
+      _cards.push({
+        ...card,
+        interval_days: 0,
+        repetitions: 0,
+        status: 'learning'
+      });
+    }
+
     _currentIndex++;
     showCard();
   } catch (err) {
@@ -228,6 +254,52 @@ function updateProgress() {
     const fill = progressBar.querySelector('.progress-bar-fill');
     if (fill) fill.style.width = `${percent}%`;
   }
+}
+
+/**
+ * ドライラン: 次回予定時間を計算
+ */
+function calculateNextInterval(card, rating) {
+  let ease = card.ease_factor ?? 2.5;
+  let interval = card.interval_days ?? 0;
+  
+  if (interval === 0) {
+    if (rating === 1 || rating === 2) return 0;
+    if (rating === 3) return 1;
+    if (rating === 4) return 4;
+  } else {
+    if (rating === 1) return 0;
+    if (rating === 2) return Math.max(interval + 1, interval * 1.2);
+    if (rating === 3) return interval * ease;
+    if (rating === 4) return interval * ease * 1.3;
+  }
+  return 0;
+}
+
+/**
+ * 期間フォーマット
+ */
+function formatInterval(days) {
+  if (days === 0) return "< 1m";
+  if (days < 1) return `${Math.round(days * 24)}h`;
+  if (days < 30) return `${Math.round(days)}d`;
+  if (days < 365) return `${Math.round(days / 30)}mo`;
+  return `${(days / 365).toFixed(1)}y`;
+}
+
+/**
+ * ボタン上の予定時間を更新
+ */
+function updateIntervalDisplay(card) {
+  const againEl = $('study-interval-again');
+  const hardEl = $('study-interval-hard');
+  const goodEl = $('study-interval-good');
+  const easyEl = $('study-interval-easy');
+
+  if (againEl) againEl.textContent = formatInterval(calculateNextInterval(card, 1));
+  if (hardEl) hardEl.textContent = formatInterval(calculateNextInterval(card, 2));
+  if (goodEl) goodEl.textContent = formatInterval(calculateNextInterval(card, 3));
+  if (easyEl) easyEl.textContent = formatInterval(calculateNextInterval(card, 4));
 }
 
 /**

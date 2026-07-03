@@ -1,8 +1,8 @@
 /**
  * srs.ts - SM-2 スペースドリピティション アルゴリズム (TypeScript版)
  *
- * backend/srs.py からの移植。
- * 評価値に基づいて easeFactor、intervalDays、repetitions を計算し、次の復習日時を算出する。
+ * 評価値に基づいて easeFactor、intervalDays、repetitions、lapses を計算し、
+ * 次の復習日時を算出する。
  */
 
 /** 復習評価値 */
@@ -18,6 +18,7 @@ export interface SRSState {
   easeFactor: number;
   intervalDays: number;
   repetitions: number;
+  lapses: number;
   status: string;
 }
 
@@ -26,6 +27,7 @@ export interface SRSResult {
   easeFactor: number;
   intervalDays: number;
   repetitions: number;
+  lapses: number;
   nextReviewAt: Date;
   status: string;
 }
@@ -33,10 +35,6 @@ export interface SRSResult {
 // --- SRS パラメータ (SSOT) ---
 const SRS_DEFAULT_EASE_FACTOR = 2.5;
 const SRS_MIN_EASE_FACTOR = 1.3;
-const SRS_AGAIN_INTERVAL_MINUTES = 1;
-const SRS_HARD_INTERVAL_MULTIPLIER = 1.2;
-const SRS_HARD_EASE_DELTA = -0.15;
-const SRS_EASY_EASE_DELTA = 0.15;
 
 /**
  * SM-2アルゴリズムに基づいて次回復習のパラメータを計算する。
@@ -49,57 +47,49 @@ export function calculateNextReview(state: SRSState, rating: Rating): SRSResult 
   let ease = state.easeFactor ?? SRS_DEFAULT_EASE_FACTOR;
   let interval = state.intervalDays ?? 0;
   let reps = state.repetitions ?? 0;
+  let lapses = state.lapses ?? 0;
   let status = state.status ?? "new";
 
-  if (rating === Rating.AGAIN) {
-    // Again: リセットして学習中に戻す
-    reps = 0;
-    // 1分後に再表示（分を日数に変換）
-    interval = SRS_AGAIN_INTERVAL_MINUTES / (60 * 24);
-    status = "learning";
-  } else if (rating === Rating.HARD) {
-    // Hard: 間隔を少し伸ばし、easeを下げる
-    ease += SRS_HARD_EASE_DELTA;
-    if (reps === 0) {
-      interval = (1.0 / (60 * 24)) * 10; // 初回は10分後
-    } else {
-      interval *= SRS_HARD_INTERVAL_MULTIPLIER;
-    }
-    reps += 1;
-    status = "review";
-  } else if (rating === Rating.GOOD) {
-    // Good: SM-2標準の間隔計算
-    if (reps === 0) {
-      interval = 1.0 / 24; // 初回: 1時間後（学習中）
+  // 新規・再学習カード
+  if (interval === 0) {
+    if (rating === Rating.AGAIN || rating === Rating.HARD) {
+      interval = 0; // 今日中に再出題
+      if (rating === Rating.AGAIN) lapses += 1;
       status = "learning";
-    } else if (reps === 1) {
-      interval = 1.0; // 2回目: 1日後
+      reps = 0;
+    } else if (rating === Rating.GOOD) {
+      interval = 1;
       status = "review";
-    } else if (reps === 2) {
-      interval = 6.0; // 3回目: 6日後
+      reps += 1;
+    } else if (rating === Rating.EASY) {
+      interval = 4;
       status = "review";
-    } else {
-      interval *= ease;
-      status = "review";
+      reps += 1;
     }
-    reps += 1;
-  } else if (rating === Rating.EASY) {
-    // Easy: 間隔を大きく伸ばし、easeを上げる
-    ease += SRS_EASY_EASE_DELTA;
-    if (reps === 0) {
-      interval = 4.0; // 初回でも4日後
-    } else {
-      interval *= ease;
-    }
-    reps += 1;
-    status = "review";
   } else {
-    // 不正な評価値の場合はGood扱い
-    return calculateNextReview(state, Rating.GOOD);
+    // 復習カード
+    if (rating === Rating.AGAIN) {
+      interval = 0;
+      ease = Math.max(SRS_MIN_EASE_FACTOR, ease - 0.2);
+      lapses += 1;
+      status = "learning";
+      reps = 0; // Againの場合はrepsをリセットする（SM-2の一般的仕様）
+    } else if (rating === Rating.HARD) {
+      interval = Math.max(interval + 1, interval * 1.2);
+      ease = Math.max(SRS_MIN_EASE_FACTOR, ease - 0.15);
+      status = "review";
+      reps += 1;
+    } else if (rating === Rating.GOOD) {
+      interval = interval * ease;
+      status = "review";
+      reps += 1;
+    } else if (rating === Rating.EASY) {
+      interval = interval * ease * 1.3;
+      ease += 0.15;
+      status = "review";
+      reps += 1;
+    }
   }
-
-  // 最小 ease_factor を適用
-  ease = Math.max(ease, SRS_MIN_EASE_FACTOR);
 
   // 次回復習日時を計算
   const nextReviewAt = new Date(now.getTime() + interval * 24 * 60 * 60 * 1000);
@@ -114,7 +104,35 @@ export function calculateNextReview(state: SRSState, rating: Rating): SRSResult 
     easeFactor: round(ease, 4),
     intervalDays: round(interval, 4),
     repetitions: reps,
+    lapses,
     nextReviewAt,
     status,
+  };
+}
+
+/**
+ * ドライラン: 各評価値を選択した場合の次回予定時間(文字列)を返す
+ * @param state 現在のカード状態
+ * @returns 各ボタン用のラベル
+ */
+export function previewNextIntervals(state: SRSState): { again: string, hard: string, good: string, easy: string } {
+  const formatInterval = (days: number) => {
+    if (days === 0) return "< 1m";
+    if (days < 1) return `${Math.round(days * 24)}h`;
+    if (days < 30) return `${Math.round(days)}d`;
+    if (days < 365) return `${Math.round(days / 30)}mo`;
+    return `${(days / 365).toFixed(1)}y`;
+  };
+
+  const resAgain = calculateNextReview(state, Rating.AGAIN);
+  const resHard = calculateNextReview(state, Rating.HARD);
+  const resGood = calculateNextReview(state, Rating.GOOD);
+  const resEasy = calculateNextReview(state, Rating.EASY);
+
+  return {
+    again: formatInterval(resAgain.intervalDays),
+    hard: formatInterval(resHard.intervalDays),
+    good: formatInterval(resGood.intervalDays),
+    easy: formatInterval(resEasy.intervalDays),
   };
 }
