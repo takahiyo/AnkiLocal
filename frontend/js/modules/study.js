@@ -150,16 +150,9 @@ function renderCardContent(card) {
     };
   }
 
-  // Basic (and reversed card): is_reversed=true の場合はfront/backを逆転
-  if (noteType === NOTE_TYPES.BASIC_REVERSED && card.is_reversed) {
-    return {
-      frontHtml: escapeHtml(card.back || ''),
-      backHtml: escapeHtml(card.front || ''),
-      metaText: 'Basic (Reversed)',
-    };
-  }
-
   // Basic（デフォルト）
+  // ※パーサーが is_reversed=true のカードで既にfront/backを入れ替えて生成しているため、
+  //   フロントエンドではそのまま表示する
   return {
     frontHtml: escapeHtml(card.front || ''),
     backHtml: escapeHtml(card.back || ''),
