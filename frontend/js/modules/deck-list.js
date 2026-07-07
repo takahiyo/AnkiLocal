@@ -38,6 +38,7 @@ function showToast(message, type = 'error') {
  */
 function renderDeckCard(deck) {
   const total = deck.card_count || 0;
+  const studyableCount = deck.studyable_count ?? total;
   const newCount = deck.new_count || 0;
   const learningCount = deck.learning_count || 0;
   const reviewCount = deck.review_count || 0;
@@ -56,7 +57,9 @@ function renderDeckCard(deck) {
       <div class="deck-card-header">
         <div>
           <div class="deck-card-name">${escapeHtml(deck.name)}</div>
-          <div class="deck-card-count">${total}枚のカード</div>
+          <div class="deck-card-count">${studyableCount !== total
+            ? `全${total}枚 / <span style="color: var(--accent-primary);">出題 ${studyableCount}枚</span>`
+            : `${total}枚のカード`}</div>
         </div>
         <div>
           ${studyReady > 0

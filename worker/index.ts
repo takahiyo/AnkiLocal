@@ -107,6 +107,24 @@ async function getDeckCounts(db: D1Database, deckId: number) {
   };
 }
 
+/**
+ * 除外タグを考慮したカード数を取得する
+ */
+async function getStudyableCount(db: D1Database, deckId: number, excludedTags: string) {
+  const tagList = excludedTags ? excludedTags.trim().split(/\s+/) : [];
+  if (tagList.length === 0) {
+    const counts = await getDeckCounts(db, deckId);
+    return counts.total;
+  }
+  const conditions = tagList.map(() => `(' ' || c.tags || ' ') NOT LIKE ?`);
+  const params: any[] = tagList.map(t => `% ${t} %`);
+  const result = await db.prepare(`
+    SELECT COUNT(*) as total FROM cards c
+    WHERE c.deck_id = ? AND (c.tags = '' OR (${conditions.join(' AND ')}))
+  `).bind(deckId, ...params).first<{ total: number }>();
+  return result?.total || 0;
+}
+
 // --- ルーティング定義 ---
 
 /**
@@ -123,12 +141,15 @@ app.get("/decks", async (c) => {
     for (const deck of decks) {
       const counts = await getDeckCounts(db, deck.id);
 
-      // オプション取得（日次タスク上限）
+      // オプション取得（日次タスク上限＋除外タグ）
       const options = await db
-        .prepare("SELECT max_new_cards, max_review_cards FROM deck_options WHERE deck_id = ?")
+        .prepare("SELECT max_new_cards, max_review_cards, excluded_tags FROM deck_options WHERE deck_id = ?")
         .bind(deck.id)
-        .first<{ max_new_cards: number; max_review_cards: number }>();
+        .first<{ max_new_cards: number; max_review_cards: number; excluded_tags: string }>();
       const dailyTaskLimit = (options?.max_new_cards || 20) + (options?.max_review_cards || 100);
+
+      // 除外タグ考慮の出題可能カード数
+      const studyableCount = await getStudyableCount(db, deck.id, options?.excluded_tags || '');
 
       // 今日の復習数
       const todayStart = new Date();
@@ -148,6 +169,7 @@ app.get("/decks", async (c) => {
         name: deck.name,
         created_at: deck.created_at,
         card_count: counts.total,
+        studyable_count: studyableCount,
         new_count: counts.new_count,
         learning_count: counts.learning_count,
         review_count: counts.review_count,

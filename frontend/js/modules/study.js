@@ -94,20 +94,16 @@ function showCard() {
   const card = _cards[_currentIndex];
   _isFlipped = false;
 
-  // カードコンテナのフリップ状態をリセットし、横回転アニメーションを付与
+  // フリップ状態を無条件にリセット
   const container = $(STUDY_IDS.CARD_CONTAINER);
   if (container) {
-    if (container.classList.contains('flipped')) {
-      container.classList.remove('flipped');
-      // 次のカードアニメーション
+    container.classList.remove('flipped');
+    container.classList.remove('next-card-anim');
+    void container.offsetWidth;
+    container.classList.add('next-card-anim');
+    setTimeout(() => {
       container.classList.remove('next-card-anim');
-      // リフローを強制してアニメーションを再トリガー
-      void container.offsetWidth;
-      container.classList.add('next-card-anim');
-      setTimeout(() => {
-        container.classList.remove('next-card-anim');
-      }, 400); // CSSの.4sに合わせる
-    }
+    }, 400);
   }
 
   // ノートタイプに応じたテキスト生成
@@ -378,6 +374,9 @@ function handleKeyboard(e) {
 
   // 入力フィールドにフォーカスがある場合は無視
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+
+  // レビュー送信中は無視
+  if (_isProcessing) return;
 
   switch (e.key) {
     case ' ':  // スペースキー

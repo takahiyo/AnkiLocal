@@ -2448,6 +2448,20 @@ async function getDeckCounts(db, deckId) {
     review_count: result?.review_count || 0
   };
 }
+async function getStudyableCount(db, deckId, excludedTags) {
+  const tagList = excludedTags ? excludedTags.trim().split(/\s+/) : [];
+  if (tagList.length === 0) {
+    const counts = await getDeckCounts(db, deckId);
+    return counts.total;
+  }
+  const conditions = tagList.map(() => `(' ' || c.tags || ' ') NOT LIKE ?`);
+  const params = tagList.map((t) => `% ${t} %`);
+  const result = await db.prepare(`
+    SELECT COUNT(*) as total FROM cards c
+    WHERE c.deck_id = ? AND (c.tags = '' OR (${conditions.join(" AND ")}))
+  `).bind(deckId, ...params).first();
+  return result?.total || 0;
+}
 app.get("/decks", async (c) => {
   const db = c.env.DB;
   try {
@@ -2455,8 +2469,9 @@ app.get("/decks", async (c) => {
     const result = [];
     for (const deck of decks) {
       const counts = await getDeckCounts(db, deck.id);
-      const options = await db.prepare("SELECT max_new_cards, max_review_cards FROM deck_options WHERE deck_id = ?").bind(deck.id).first();
+      const options = await db.prepare("SELECT max_new_cards, max_review_cards, excluded_tags FROM deck_options WHERE deck_id = ?").bind(deck.id).first();
       const dailyTaskLimit = (options?.max_new_cards || 20) + (options?.max_review_cards || 100);
+      const studyableCount = await getStudyableCount(db, deck.id, options?.excluded_tags || "");
       const todayStart = /* @__PURE__ */ new Date();
       todayStart.setUTCHours(0, 0, 0, 0);
       const todayResult = await db.prepare(
@@ -2470,6 +2485,7 @@ app.get("/decks", async (c) => {
         name: deck.name,
         created_at: deck.created_at,
         card_count: counts.total,
+        studyable_count: studyableCount,
         new_count: counts.new_count,
         learning_count: counts.learning_count,
         review_count: counts.review_count,
