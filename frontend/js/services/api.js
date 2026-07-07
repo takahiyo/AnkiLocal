@@ -227,3 +227,6 @@ export const fetchDeckOptions = (deckId) => apiGet(API.OPTIONS(deckId));
 
 /** デッキオプションを更新 */
 export const updateDeckOptions = (deckId, options) => apiPost(API.OPTIONS(deckId), options);
+
+/** デッキ内のタグ一覧を取得 */
+export const fetchDeckTags = (deckId) => apiGet(API.TAGS(deckId));

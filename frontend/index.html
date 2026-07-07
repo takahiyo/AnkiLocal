@@ -269,21 +269,37 @@
                 <h3 id="deck-options-title" class="modal-title">デッキオプション</h3>
                 <button id="deck-options-close" class="modal-close">&times;</button>
             </div>
+            <div class="modal-tabs">
+                <button class="modal-tab active" data-tab="options">基本設定</button>
+                <button class="modal-tab" data-tab="tags">出題タグ</button>
+            </div>
             <div class="modal-body">
-                <div class="form-group">
-                    <label for="option-new-cards">1日の新規カード上限</label>
-                    <input type="number" id="option-new-cards" min="0" max="999" value="20" class="form-control">
+                <div id="options-tab-panel" class="tab-panel active">
+                    <div class="form-group">
+                        <label for="option-new-cards">1日の新規カード上限</label>
+                        <input type="number" id="option-new-cards" min="0" max="999" value="20" class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label for="option-review-cards">1日の復習カード上限</label>
+                        <input type="number" id="option-review-cards" min="0" max="999" value="100" class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label for="option-review-order">出題順序</label>
+                        <select id="option-review-order" class="form-control">
+                            <option value="random">ランダム</option>
+                            <option value="sequential">順次</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="option-review-cards">1日の復習カード上限</label>
-                    <input type="number" id="option-review-cards" min="0" max="999" value="100" class="form-control">
-                </div>
-                <div class="form-group">
-                    <label for="option-review-order">出題順序</label>
-                    <select id="option-review-order" class="form-control">
-                        <option value="random">ランダム</option>
-                        <option value="sequential">順次</option>
-                    </select>
+                <div id="tags-tab-panel" class="tab-panel">
+                    <div id="tag-checklist-loading" class="loading-spinner" style="padding: 1rem 0;">
+                        <div class="spinner"></div>
+                        <p>タグを読み込んでいます...</p>
+                    </div>
+                    <div id="tag-checklist" class="tag-checklist">
+                        <!-- 動的にチェックボックスが挿入されます -->
+                    </div>
+                    <p id="tag-checklist-empty" class="tag-checklist-empty hidden">このデッキにはタグがありません。</p>
                 </div>
             </div>
             <div class="modal-footer" style="margin-top: 1.5rem; text-align: right;">

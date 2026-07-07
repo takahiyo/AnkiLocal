@@ -49,5 +49,6 @@ CREATE TABLE IF NOT EXISTS deck_options (
     max_new_cards    INTEGER NOT NULL DEFAULT 20,
     max_review_cards INTEGER NOT NULL DEFAULT 100,
     review_order     TEXT NOT NULL DEFAULT 'random',
+    excluded_tags    TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
 );

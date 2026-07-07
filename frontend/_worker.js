@@ -2393,12 +2393,17 @@ app.use("*", async (c, next) => {
   } catch (e) {
   }
   try {
+    await c.env.DB.prepare("ALTER TABLE deck_options ADD COLUMN excluded_tags TEXT NOT NULL DEFAULT ''").run();
+  } catch (e) {
+  }
+  try {
     await c.env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS deck_options (
           deck_id          INTEGER PRIMARY KEY,
           max_new_cards    INTEGER NOT NULL DEFAULT 20,
           max_review_cards INTEGER NOT NULL DEFAULT 100,
           review_order     TEXT NOT NULL DEFAULT 'random',
+          excluded_tags    TEXT NOT NULL DEFAULT '',
           FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
       )
     `).run();
@@ -2593,12 +2598,13 @@ app.get("/decks/:deckId/options", async (c) => {
   const deckIdStr = c.req.param("deckId");
   const deckId = parseInt(deckIdStr, 10);
   if (isNaN(deckId)) return c.json({ error: "\u7121\u52B9\u306A\u30C7\u30C3\u30ADID\u3067\u3059" }, 400);
-  let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order FROM deck_options WHERE deck_id = ?").bind(deckId).first();
+  let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ?").bind(deckId).first();
   if (!options) {
     options = {
       max_new_cards: 20,
       max_review_cards: 100,
-      review_order: "random"
+      review_order: "random",
+      excluded_tags: ""
     };
   }
   return c.json(options);
@@ -2612,15 +2618,35 @@ app.post("/decks/:deckId/options", async (c) => {
   const maxNew = typeof body.max_new_cards === "number" ? body.max_new_cards : 20;
   const maxRev = typeof body.max_review_cards === "number" ? body.max_review_cards : 100;
   const order = body.review_order === "sequential" ? "sequential" : "random";
+  const excludedTags = typeof body.excluded_tags === "string" ? body.excluded_tags : "";
   await db.prepare(`
-    INSERT INTO deck_options (deck_id, max_new_cards, max_review_cards, review_order)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO deck_options (deck_id, max_new_cards, max_review_cards, review_order, excluded_tags)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(deck_id) DO UPDATE SET
       max_new_cards = excluded.max_new_cards,
       max_review_cards = excluded.max_review_cards,
-      review_order = excluded.review_order
-  `).bind(deckId, maxNew, maxRev, order).run();
+      review_order = excluded.review_order,
+      excluded_tags = excluded.excluded_tags
+  `).bind(deckId, maxNew, maxRev, order, excludedTags).run();
   return c.json({ success: true });
+});
+app.get("/decks/:deckId/tags", async (c) => {
+  const db = c.env.DB;
+  const deckId = parseInt(c.req.param("deckId"), 10);
+  if (isNaN(deckId)) return c.json({ error: "\u7121\u52B9\u306A\u30C7\u30C3\u30ADID\u3067\u3059" }, 400);
+  try {
+    const { results: rows } = await db.prepare("SELECT DISTINCT tags FROM cards WHERE deck_id = ? AND tags != ''").bind(deckId).all();
+    const tagSet = /* @__PURE__ */ new Set();
+    for (const row of rows) {
+      for (const tag of row.tags.trim().split(/\s+/)) {
+        if (tag) tagSet.add(tag);
+      }
+    }
+    const sorted = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+    return c.json(sorted);
+  } catch (err) {
+    return c.json({ error: `\u30BF\u30B0\u53D6\u5F97\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
 });
 app.get("/decks/:deckId/study", async (c) => {
   const db = c.env.DB;
@@ -2633,9 +2659,17 @@ app.get("/decks/:deckId/study", async (c) => {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     const batchSize = 20;
     const cards = [];
-    let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order FROM deck_options WHERE deck_id = ?").bind(deckId).first();
+    let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ?").bind(deckId).first();
     if (!options) {
-      options = { max_new_cards: 20, max_review_cards: 100, review_order: "random" };
+      options = { max_new_cards: 20, max_review_cards: 100, review_order: "random", excluded_tags: "" };
+    }
+    const excludedTagList = options.excluded_tags ? options.excluded_tags.trim().split(/\s+/) : [];
+    let tagFilterSql = "";
+    const tagFilterParams = [];
+    if (excludedTagList.length > 0) {
+      const conditions = excludedTagList.map(() => `(' ' || c.tags || ' ') NOT LIKE ?`);
+      tagFilterParams.push(...excludedTagList.map((t) => `% ${t} %`));
+      tagFilterSql = ` AND (c.tags = '' OR (${conditions.join(" AND ")}))`;
     }
     const newBatchSize = options.max_new_cards;
     if (newBatchSize > 0) {
@@ -2643,10 +2677,10 @@ app.get("/decks/:deckId/study", async (c) => {
         `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
            JOIN card_states cs ON c.id = cs.card_id
-           WHERE c.deck_id = ? AND cs.status = 'new'
+           WHERE c.deck_id = ? AND cs.status = 'new'${tagFilterSql}
            ORDER BY c.id
            LIMIT ?`
-      ).bind(deckId, newBatchSize).all();
+      ).bind(deckId, ...tagFilterParams, newBatchSize).all();
       cards.push(...newCards);
     }
     const reviewBatchSize = options.max_review_cards;
@@ -2656,10 +2690,10 @@ app.get("/decks/:deckId/study", async (c) => {
            FROM cards c
            JOIN card_states cs ON c.id = cs.card_id
            WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
-             AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)
+             AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)${tagFilterSql}
            ORDER BY cs.next_review_at
            LIMIT ?`
-      ).bind(deckId, nowIso, reviewBatchSize).all();
+      ).bind(deckId, nowIso, ...tagFilterParams, reviewBatchSize).all();
       cards.push(...reviewCards);
     }
     if (options.review_order === "random") {

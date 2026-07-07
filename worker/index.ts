@@ -36,12 +36,17 @@ app.use("*", async (c, next) => {
   } catch (e) {}
 
   try {
+    await c.env.DB.prepare("ALTER TABLE deck_options ADD COLUMN excluded_tags TEXT NOT NULL DEFAULT ''").run();
+  } catch (e) {}
+
+  try {
     await c.env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS deck_options (
           deck_id          INTEGER PRIMARY KEY,
           max_new_cards    INTEGER NOT NULL DEFAULT 20,
           max_review_cards INTEGER NOT NULL DEFAULT 100,
           review_order     TEXT NOT NULL DEFAULT 'random',
+          excluded_tags    TEXT NOT NULL DEFAULT '',
           FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
       )
     `).run();
@@ -315,16 +320,16 @@ app.get("/decks/:deckId/options", async (c) => {
   if (isNaN(deckId)) return c.json({ error: "無効なデッキIDです" }, 400);
 
   let options = await db
-    .prepare("SELECT max_new_cards, max_review_cards, review_order FROM deck_options WHERE deck_id = ?")
+    .prepare("SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ?")
     .bind(deckId)
-    .first<{ max_new_cards: number; max_review_cards: number; review_order: string }>();
+    .first<{ max_new_cards: number; max_review_cards: number; review_order: string; excluded_tags: string }>();
 
   if (!options) {
-    // デフォルト値
     options = {
       max_new_cards: 20,
       max_review_cards: 100,
-      review_order: 'random'
+      review_order: 'random',
+      excluded_tags: ''
     };
   }
 
@@ -343,21 +348,51 @@ app.post("/decks/:deckId/options", async (c) => {
   const maxNew = typeof body.max_new_cards === 'number' ? body.max_new_cards : 20;
   const maxRev = typeof body.max_review_cards === 'number' ? body.max_review_cards : 100;
   const order = body.review_order === 'sequential' ? 'sequential' : 'random';
+  const excludedTags = typeof body.excluded_tags === 'string' ? body.excluded_tags : '';
 
   await db.prepare(`
-    INSERT INTO deck_options (deck_id, max_new_cards, max_review_cards, review_order)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO deck_options (deck_id, max_new_cards, max_review_cards, review_order, excluded_tags)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(deck_id) DO UPDATE SET
       max_new_cards = excluded.max_new_cards,
       max_review_cards = excluded.max_review_cards,
-      review_order = excluded.review_order
-  `).bind(deckId, maxNew, maxRev, order).run();
+      review_order = excluded.review_order,
+      excluded_tags = excluded.excluded_tags
+  `).bind(deckId, maxNew, maxRev, order, excludedTags).run();
 
   return c.json({ success: true });
 });
 
 // ==========================================
-// 7. 出題 (Study)
+// 7. デッキ内タグ一覧
+// ==========================================
+
+app.get("/decks/:deckId/tags", async (c) => {
+  const db: D1Database = c.env.DB;
+  const deckId = parseInt(c.req.param("deckId"), 10);
+  if (isNaN(deckId)) return c.json({ error: "無効なデッキIDです" }, 400);
+
+  try {
+    const { results: rows } = await db
+      .prepare("SELECT DISTINCT tags FROM cards WHERE deck_id = ? AND tags != ''")
+      .bind(deckId)
+      .all<{ tags: string }>();
+
+    const tagSet = new Set<string>();
+    for (const row of rows) {
+      for (const tag of row.tags.trim().split(/\s+/)) {
+        if (tag) tagSet.add(tag);
+      }
+    }
+    const sorted = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+    return c.json(sorted);
+  } catch (err: any) {
+    return c.json({ error: `タグ取得エラー: ${err.message}` }, 500);
+  }
+});
+
+// ==========================================
+// 8. 出題 (Study)
 // ==========================================
 
 app.get("/decks/:deckId/study", async (c) => {
@@ -376,10 +411,19 @@ app.get("/decks/:deckId/study", async (c) => {
 
     const cards: any[] = [];
 
-    // オプションの取得
-    let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order FROM deck_options WHERE deck_id = ?").bind(deckId).first<{max_new_cards: number, max_review_cards: number, review_order: string}>();
+    let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ?").bind(deckId).first<{max_new_cards: number, max_review_cards: number, review_order: string, excluded_tags: string}>();
     if (!options) {
-      options = { max_new_cards: 20, max_review_cards: 100, review_order: 'random' };
+      options = { max_new_cards: 20, max_review_cards: 100, review_order: 'random', excluded_tags: '' };
+    }
+
+    // 除外タグ条件を構築
+    const excludedTagList = options.excluded_tags ? options.excluded_tags.trim().split(/\s+/) : [];
+    let tagFilterSql = '';
+    const tagFilterParams: any[] = [];
+    if (excludedTagList.length > 0) {
+      const conditions = excludedTagList.map(() => `(' ' || c.tags || ' ') NOT LIKE ?`);
+      tagFilterParams.push(...excludedTagList.map(t => `% ${t} %`));
+      tagFilterSql = ` AND (c.tags = '' OR (${conditions.join(' AND ')}))`;
     }
 
     // 1. new カード
@@ -390,11 +434,11 @@ app.get("/decks/:deckId/study", async (c) => {
           `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
            JOIN card_states cs ON c.id = cs.card_id
-           WHERE c.deck_id = ? AND cs.status = 'new'
+           WHERE c.deck_id = ? AND cs.status = 'new'${tagFilterSql}
            ORDER BY c.id
            LIMIT ?`
         )
-        .bind(deckId, newBatchSize)
+        .bind(deckId, ...tagFilterParams, newBatchSize)
         .all();
       cards.push(...newCards);
     }
@@ -408,11 +452,11 @@ app.get("/decks/:deckId/study", async (c) => {
            FROM cards c
            JOIN card_states cs ON c.id = cs.card_id
            WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
-             AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)
+             AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)${tagFilterSql}
            ORDER BY cs.next_review_at
            LIMIT ?`
         )
-        .bind(deckId, nowIso, reviewBatchSize)
+        .bind(deckId, nowIso, ...tagFilterParams, reviewBatchSize)
         .all();
       cards.push(...reviewCards);
     }

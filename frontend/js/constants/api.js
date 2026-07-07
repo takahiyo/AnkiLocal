@@ -25,6 +25,9 @@ export const API = Object.freeze({
   /** GET/POST: デッキオプション設定 */
   OPTIONS: (deckId) => `/api/decks/${deckId}/options`,
 
+  /** GET: デッキ内タグ一覧 */
+  TAGS: (deckId) => `/api/decks/${deckId}/tags`,
+
   /** GET: 全体統計 → {total_cards, new_count, learning_count, review_count, mastered_count, decks:[...], recent_reviews:[...]} */
   STATS: '/api/stats',
 

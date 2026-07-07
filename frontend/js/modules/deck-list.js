@@ -10,11 +10,12 @@
  */
 
 import { DECK_LIST_IDS } from '../constants/index.js';
-import { fetchDecks, fetchDeckOptions, updateDeckOptions } from '../services/api.js';
+import { fetchDecks, fetchDeckOptions, updateDeckOptions, fetchDeckTags } from '../services/api.js';
 import { navigateTo } from './router.js';
 
 let currentOptionsDeckId = null;
 let closeModalTimer = null;
+let currentExcludedTags = new Set();
 
 /**
  * トースト通知を表示するユーティリティ。
@@ -229,16 +230,72 @@ async function openOptionsModal(deckId) {
   try {
     if (closeModalTimer) clearTimeout(closeModalTimer);
 
-    const options = await fetchDeckOptions(deckId);
+    const [options, allTags] = await Promise.all([
+      fetchDeckOptions(deckId),
+      fetchDeckTags(deckId)
+    ]);
+
     newCardsInput.value = options.max_new_cards;
     reviewCardsInput.value = options.max_review_cards;
     reviewOrderSelect.value = options.review_order;
+
+    currentExcludedTags = new Set(
+      (options.excluded_tags || '').trim().split(/\s+/).filter(Boolean)
+    );
+
+    renderTagChecklist(allTags, currentExcludedTags);
+
+    // 最初のタブ（基本設定）をアクティブに
+    activateTab('options');
 
     modal.classList.remove('hidden');
     modal.classList.add('active');
   } catch (err) {
     showToast(`オプションの取得に失敗しました: ${err.message}`, 'error');
   }
+}
+
+/**
+ * タグチェックリストを描画する
+ */
+function renderTagChecklist(tags, excludedSet) {
+  const container = document.getElementById('tag-checklist');
+  const emptyMsg = document.getElementById('tag-checklist-empty');
+  const loading = document.getElementById('tag-checklist-loading');
+
+  if (!container) return;
+
+  if (loading) loading.style.display = 'none';
+
+  if (!tags || tags.length === 0) {
+    container.innerHTML = '';
+    if (emptyMsg) emptyMsg.classList.remove('hidden');
+    return;
+  }
+
+  if (emptyMsg) emptyMsg.classList.add('hidden');
+
+  container.innerHTML = tags.map(tag => {
+    const checked = !excludedSet.has(tag);
+    return `
+      <div class="tag-checklist-item">
+        <input type="checkbox" id="tag-chk-${escapeHtml(tag)}" value="${escapeHtml(tag)}" ${checked ? 'checked' : ''}>
+        <label for="tag-chk-${escapeHtml(tag)}">${escapeHtml(tag)}</label>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * タブを切り替える
+ */
+function activateTab(tabId) {
+  document.querySelectorAll('.modal-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tabId);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === `${tabId}-tab-panel`);
+  });
 }
 
 /**
@@ -263,12 +320,21 @@ async function saveOptions() {
   const maxNew = parseInt(document.getElementById('option-new-cards').value, 10);
   const maxRev = parseInt(document.getElementById('option-review-cards').value, 10);
   const order = document.getElementById('option-review-order').value;
+
+  // チェックが外れているタグ = 出題対象外
+  const excludedTags = [];
+  document.querySelectorAll('#tag-checklist .tag-checklist-item input[type="checkbox"]').forEach(cb => {
+    if (!cb.checked) {
+      excludedTags.push(cb.value);
+    }
+  });
   
   try {
     await updateDeckOptions(currentOptionsDeckId, {
       max_new_cards: isNaN(maxNew) ? 20 : maxNew,
       max_review_cards: isNaN(maxRev) ? 100 : maxRev,
-      review_order: order
+      review_order: order,
+      excluded_tags: excludedTags.join(' ')
     });
     showToast('オプションを保存しました', 'success');
     closeOptionsModal();
@@ -295,4 +361,11 @@ export function init() {
       if (e.target === modalOverlay) closeOptionsModal();
     });
   }
+
+  // タブ切替
+  document.querySelectorAll('.modal-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      activateTab(tab.dataset.tab);
+    });
+  });
 }
