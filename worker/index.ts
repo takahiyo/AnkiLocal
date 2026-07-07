@@ -9,26 +9,25 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>().basePath("/api");
 
-// 未定義ルート（静的アセットへのアクセス）をCloudflare Pagesにフォールスルーする
-app.notFound(async (c) => {
-  return c.env.ASSETS.fetch(c.req.raw);
-});
-
 // --- トークン認証ミドルウェア ---
 app.use("*", async (c, next) => {
   // 環境変数 ACCESS_TOKEN を参照、設定されていない場合はデフォルト値を使用
   const expectedToken = (c.env as any).ACCESS_TOKEN || "ankilocal-secret";
-  
-  let token = c.req.query("token");
-  if (!token) {
-    const authHeader = c.req.header("Authorization");
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7);
-    }
-  }
 
-  if (token !== expectedToken) {
-    return c.json({ error: "認証エラー: 無効なトークンです" }, 401);
+  // APIルート（/api/で始まるパス）のみトークン認証を実施
+  const url = new URL(c.req.url);
+  if (url.pathname.startsWith("/api/")) {
+    let token = c.req.query("token");
+    if (!token) {
+      const authHeader = c.req.header("Authorization");
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        token = authHeader.substring(7);
+      }
+    }
+
+    if (token !== expectedToken) {
+      return c.json({ error: "認証エラー: 無効なトークンです" }, 401);
+    }
   }
 
   // 自動マイグレーション (lapsesカラムの追加等)
@@ -49,6 +48,27 @@ app.use("*", async (c, next) => {
   } catch (e) {}
 
   await next();
+});
+
+// 未定義ルート（静的アセットへのアクセス）をCloudflare Pagesにフォールスルーし、
+// HTMLレスポンスには認証トークンを埋め込む
+app.notFound(async (c) => {
+  const response = await c.env.ASSETS.fetch(c.req.raw);
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("text/html")) {
+    const token = (c.env as any).ACCESS_TOKEN || "ankilocal-secret";
+    const html = await response.text();
+    const injected = html.replace(
+      "</head>",
+      `<script>window.__ANKI_TOKEN__ = "${token}";</script></head>`
+    );
+    return new Response(injected, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+  return response;
 });
 
 // --- APIレスポンス用のヘルパー関数 ---
@@ -98,16 +118,36 @@ app.get("/decks", async (c) => {
     for (const deck of decks) {
       const counts = await getDeckCounts(db, deck.id);
 
+      // オプション取得（日次タスク上限）
+      const options = await db
+        .prepare("SELECT max_new_cards, max_review_cards FROM deck_options WHERE deck_id = ?")
+        .bind(deck.id)
+        .first<{ max_new_cards: number; max_review_cards: number }>();
+      const dailyTaskLimit = (options?.max_new_cards || 20) + (options?.max_review_cards || 100);
+
+      // 今日の復習数
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayResult = await db
+        .prepare(
+          `SELECT COUNT(*) as today FROM review_logs
+           WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?)`
+        )
+        .bind(todayStart.toISOString(), deck.id)
+        .first<{ today: number }>();
+      const reviewsToday = todayResult?.today || 0;
+      const dailyRemaining = Math.max(0, dailyTaskLimit - reviewsToday);
+
       result.push({
         id: deck.id,
         name: deck.name,
         created_at: deck.created_at,
-        // フロントエンドJS (deck-list.js) が直接読み込むフラットなプロパティ
         card_count: counts.total,
         new_count: counts.new_count,
         learning_count: counts.learning_count,
         review_count: counts.review_count,
-        // バックエンドモデル互換のネストされたプロパティ
+        reviews_today: reviewsToday,
+        daily_remaining: dailyRemaining,
         card_counts: {
           total: counts.total,
           new: counts.new_count,

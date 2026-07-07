@@ -78,6 +78,51 @@ async function handleErrorResponse(response) {
   throw new Error(errorMessage);
 }
 
+/** fetchタイムアウト（ミリ秒） */
+const FETCH_TIMEOUT = 10000;
+
+/**
+ * タイムアウト付きfetchラッパー。
+ * @param {string} url - リクエストURL
+ * @param {object} options - fetchオプション
+ * @returns {Promise<Response>}
+ */
+async function fetchWithTimeout(url, options) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * レスポンスをJSONとして安全にパースする。
+ * Content-TypeがJSONでない場合は詳細をログに出力してエラーを投げる。
+ * @param {Response} response - fetchレスポンス
+ * @param {string} endpoint - 元のエンドポイント（ログ用）
+ * @returns {Promise<any>} パース済みJSONデータ
+ */
+async function parseJsonResponse(response, endpoint) {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const text = await response.text();
+    const preview = text.substring(0, 200);
+    console.error(`[API] Non-JSON response for ${endpoint}:`, {
+      status: response.status,
+      contentType,
+      preview
+    });
+    throw new Error(
+      `サーバーからJSON以外の応答がありました (HTTP ${response.status}, ${contentType})。` +
+      `URL: ${endpoint} が正しくルーティングされているか確認してください。`
+    );
+  }
+  return response.json();
+}
+
 /**
  * GETリクエストを送信する。
  * @param {string} endpoint - APIエンドポイント
@@ -87,7 +132,7 @@ export async function apiGet(endpoint) {
   const url = buildUrl(endpoint);
   console.log(`[API GET] Request: ${endpoint}`);
   
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'GET',
     headers: { 'Accept': 'application/json' },
   });
@@ -97,7 +142,7 @@ export async function apiGet(endpoint) {
     await handleErrorResponse(response);
   }
 
-  const data = await response.json();
+  const data = await parseJsonResponse(response, endpoint);
   console.log(`[API GET] Success: ${endpoint}`, data);
   return data;
 }
@@ -112,7 +157,7 @@ export async function apiPost(endpoint, body) {
   const url = buildUrl(endpoint);
   console.log(`[API POST] Request: ${endpoint}`, body);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -126,7 +171,7 @@ export async function apiPost(endpoint, body) {
     await handleErrorResponse(response);
   }
 
-  const data = await response.json();
+  const data = await parseJsonResponse(response, endpoint);
   console.log(`[API POST] Success: ${endpoint}`, data);
   return data;
 }

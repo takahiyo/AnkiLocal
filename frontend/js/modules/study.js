@@ -12,7 +12,7 @@
 import { STUDY_IDS, NOTE_TYPES } from '../constants/index.js';
 import { fetchStudyCards, submitReview, fetchDecks } from '../services/api.js';
 import { renderClozeQuestion, renderClozeAnswer } from '../services/cloze.js';
-import { navigateTo } from './router.js';
+import { goBack } from './router.js';
 
 /* === モジュール内部状態 === */
 let _cards = [];           // 学習対象カード配列
@@ -360,13 +360,13 @@ function bindEvents() {
   // 戻るボタン
   const backBtn = $(STUDY_IDS.BACK_BTN);
   if (backBtn) {
-    backBtn.addEventListener('click', () => navigateTo('/decks'));
+    backBtn.addEventListener('click', () => goBack('/decks'));
   }
   
   // 完了画面のデッキ一覧に戻るボタン
   const completeBackBtn = $('study-complete-back-btn');
   if (completeBackBtn) {
-    completeBackBtn.addEventListener('click', () => navigateTo('/decks'));
+    completeBackBtn.addEventListener('click', () => goBack('/decks'));
   }
 
   // キーボードショートカット

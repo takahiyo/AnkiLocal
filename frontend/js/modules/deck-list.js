@@ -32,7 +32,7 @@ function showToast(message, type = 'error') {
 
 /**
  * デッキカードのHTML文字列を生成する。
- * @param {object} deck - デッキ情報 {id, name, card_count, new_count, review_count, learning_count}
+ * @param {object} deck - デッキ情報 {id, name, card_count, new_count, review_count, learning_count, reviews_today, daily_remaining}
  * @returns {string} HTML文字列
  */
 function renderDeckCard(deck) {
@@ -43,6 +43,11 @@ function renderDeckCard(deck) {
   const studyReady = newCount + learningCount + reviewCount;
   const masteredCount = Math.max(0, total - studyReady);
   const progressPercent = total > 0 ? Math.round((masteredCount / total) * 100) : 0;
+
+  const reviewsToday = deck.reviews_today || 0;
+  const dailyRemaining = deck.daily_remaining || 0;
+  const dailyTaskLimit = reviewsToday + dailyRemaining;
+  const dailyPercent = dailyTaskLimit > 0 ? Math.round((reviewsToday / dailyTaskLimit) * 100) : 0;
 
   return `
     <div class="card deck-card" data-deck-id="${deck.id}" role="button" tabindex="0"
@@ -65,12 +70,29 @@ function renderDeckCard(deck) {
         <span class="badge badge-learning">学習中 ${learningCount}</span>
         <span class="badge badge-review">復習 ${reviewCount}</span>
       </div>
-      <div class="progress-bar">
-        <div class="progress-bar-fill" style="width: ${progressPercent}%"></div>
+      <div class="dual-progress-container">
+        <div class="dual-progress-bar dual-progress-mastery active">
+          <div class="dual-progress-label">
+            <span>習得率</span>
+            <span>${progressPercent}%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-bar-fill" style="width: ${progressPercent}%"></div>
+          </div>
+        </div>
+        <div class="dual-progress-bar dual-progress-daily">
+          <div class="dual-progress-label">
+            <span>今日の残り</span>
+            <span>${dailyRemaining > 0 ? dailyRemaining + '枚' : '完了'}</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-bar-fill progress-bar-daily" style="width: ${dailyPercent}%"></div>
+          </div>
+        </div>
       </div>
       <div class="deck-card-footer">
         <span style="font-size: var(--font-size-xs); color: var(--text-muted);">
-          習得率 ${progressPercent}%
+          今日 ${reviewsToday}枚復習済み
         </span>
         <button class="btn btn-primary btn-sm study-start-btn" data-deck-id="${deck.id}">
           学習開始 →
@@ -146,6 +168,12 @@ export async function loadDeckList() {
   } finally {
     if (loading) loading.style.display = 'none';
     if (container) container.style.display = 'block';
+    // デュアルプログレスバーの自動切り替えを有効化（コンテナ表示後）
+    if (grid) {
+      grid.querySelectorAll('.dual-progress-container').forEach(el => {
+        el.classList.add('auto-alternate');
+      });
+    }
   }
 }
 

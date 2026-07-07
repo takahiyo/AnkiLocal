@@ -262,7 +262,7 @@
   grid-template-columns: repeat(4, 1fr);
 }
 
-.rating-buttons .btn-rating {
+.rating-buttons .btn-rate {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -367,7 +367,7 @@
     gap: var(--spacing-xs);
   }
 
-  .rating-buttons .btn-rating {
+.rating-buttons .btn-rate {
     min-height: 52px;
     padding: var(--spacing-xs);
   }

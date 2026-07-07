@@ -14,7 +14,7 @@
  */
 
 import { init as initApi, setToken } from './services/api.js';
-import { init as initRouter, navigateTo, onRouteChange } from './modules/router.js';
+import { init as initRouter, navigateTo, replaceRoute, onRouteChange } from './modules/router.js';
 import { init as initDeckList, loadDeckList } from './modules/deck-list.js';
 import { init as initStudy, startStudySession } from './modules/study.js';
 import { init as initStats, loadStats } from './modules/stats.js';
@@ -22,11 +22,13 @@ import { init as initImport, resetView as resetImportView } from './modules/impo
 import { NAV_IDS } from './constants/dom.js';
 
 document.addEventListener('DOMContentLoaded', () => {
-    // 1. URLから認証トークンを抽出
-    const urlParams = new URLSearchParams(window.location.search);
-    let token = urlParams.get('token');
-
-    // ローカルストレージからのフォールバックと保存
+    // 1. 認証トークンを次の優先順位で取得:
+    //    サーバー埋め込み → URLクエリ → ローカルストレージ
+    let token = window.__ANKI_TOKEN__;
+    if (!token) {
+        const urlParams = new URLSearchParams(window.location.search);
+        token = urlParams.get('token');
+    }
     if (token) {
         localStorage.setItem('anki_local_token', token);
     } else {
@@ -66,7 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (params && params.deckId) {
                 startStudySession(params.deckId);
             } else {
-                navigateTo('/decks');
+                replaceRoute('/decks');
             }
         } else if (route === '/stats') {
             loadStats();

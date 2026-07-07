@@ -251,7 +251,7 @@
 }
 
 /* --- 評価ボタンのサイズ --- */
-.btn-rating {
+.btn-rate {
   padding: var(--spacing-md) var(--spacing-xl);
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
@@ -582,6 +582,62 @@
 }
 
 /* =============================================
+   デュアルプログレスバー（習得率 + 今日の残り）
+   ============================================= */
+.dual-progress-container {
+  position: relative;
+  height: 36px;
+  overflow: hidden;
+}
+
+.dual-progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  pointer-events: none;
+}
+
+.dual-progress-bar.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dual-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.progress-bar-daily {
+  background: var(--color-success) !important;
+}
+
+.progress-bar-daily::after {
+  background: rgba(16, 185, 129, 0.6) !important;
+}
+
+/* 5秒間隔で自動切り替えアニメーション */
+@keyframes progressAlternate {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.dual-progress-container.auto-alternate .dual-progress-mastery {
+  animation: progressAlternate 10s ease-in-out infinite;
+}
+
+.dual-progress-container.auto-alternate .dual-progress-daily {
+  animation: progressAlternate 10s ease-in-out infinite;
+  animation-delay: 5s;
+}
+
+/* =============================================
    ローディングスピナー
    ============================================= */
 .spinner {
@@ -674,7 +730,7 @@
     padding: 0 var(--spacing-md);
   }
 
-  .btn-rating {
+  .btn-rate {
     min-width: 70px;
     padding: var(--spacing-sm) var(--spacing-md);
     font-size: var(--font-size-sm);

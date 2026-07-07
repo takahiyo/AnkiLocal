@@ -29,6 +29,9 @@ const NAV_ROUTE_MAP = Object.freeze({
 /** ルート変更時のコールバック関数群 */
 let _onRouteChangeCallbacks = [];
 
+/** 履歴のスタック追跡用（アプリ内からhistory.back()が安全か判定するため） */
+let _historyCount = 0;
+
 /**
  * 現在のハッシュからルート情報を解析する。
  * @returns {{ route: string, params: object }} ルートパスとパラメータ
@@ -60,7 +63,7 @@ function activatePage(route) {
   const targetPageId = ROUTES[route];
   if (!targetPageId) {
     // 不明なルートの場合はデッキ一覧にフォールバック
-    navigateTo('/decks');
+    replaceRoute('/decks');
     return;
   }
 
@@ -95,11 +98,34 @@ export function onRouteChange(callback) {
 }
 
 /**
- * 指定ルートに遷移する。
+ * 指定ルートに遷移する。履歴スタックが積まれる（進む）。
  * @param {string} path - ルートパス（例: '/study/123'）
  */
 export function navigateTo(path) {
   window.location.hash = path;
+}
+
+/**
+ * 履歴スタックを積まずに現在のルートを置換する。
+ * @param {string} path - ルートパス（例: '/decks'）
+ */
+export function replaceRoute(path) {
+  const url = new URL(window.location);
+  url.hash = path;
+  window.history.replaceState(null, '', url);
+  handleHashChange();
+}
+
+/**
+ * 前のページに戻る。履歴があればhistory.back()し、無ければフォールバックへ。
+ * @param {string} fallbackPath - フォールバック先ルート（例: '/decks'）
+ */
+export function goBack(fallbackPath = '/decks') {
+  if (_historyCount > 0) {
+    window.history.back();
+  } else {
+    replaceRoute(fallbackPath);
+  }
 }
 
 /**
@@ -125,11 +151,14 @@ function handleHashChange() {
  * hashchangeイベントをリッスンし、初期ルートを処理する。
  */
 export function init() {
-  window.addEventListener('hashchange', handleHashChange);
+  window.addEventListener('hashchange', () => {
+    _historyCount++;
+    handleHashChange();
+  });
 
   // 初期ルートが未設定の場合はデッキ一覧を設定
   if (!window.location.hash) {
-    window.location.hash = '#/decks';
+    window.location.hash = '#/decks'; // これがhashchangeをトリガーする
   } else {
     // すでにハッシュがある場合は即座にハンドリング
     handleHashChange();

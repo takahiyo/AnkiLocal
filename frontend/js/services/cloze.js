@@ -47,20 +47,24 @@ export function getClozeCount(text) {
 export function renderClozeQuestion(text, targetIndex) {
   if (!text) return '';
 
-  return escapeHtml(text).replace(
-    // エスケープ後のHTMLに対してマッチするため、エスケープ前に処理
-    // → 元テキストに対して処理してからHTMLに変換する方が安全
-    /dummy/, '' // プレースホルダ（下の実装で上書き）
-  ) && text.replace(CLOZE_REGEX, (_match, index, answer, hint) => {
+  let result = '';
+  let lastIndex = 0;
+
+  text.replace(CLOZE_REGEX, (match, index, answer, hint, offset) => {
+    result += escapeHtml(text.slice(lastIndex, offset));
     const num = parseInt(index, 10);
     if (num === targetIndex) {
-      // 対象: プレースホルダ表示（ヒントがあればヒントを表示）
       const displayText = hint ? hint : '[...]';
-      return `<span class="cloze-placeholder">${escapeHtml(displayText)}</span>`;
+      result += `<span class="cloze-placeholder">${escapeHtml(displayText)}</span>`;
+    } else {
+      result += escapeHtml(answer);
     }
-    // 非対象: 答えをそのまま表示
-    return escapeHtml(answer);
+    lastIndex = offset + match.length;
+    return '';
   });
+
+  result += escapeHtml(text.slice(lastIndex));
+  return result;
 }
 
 /**
@@ -74,15 +78,23 @@ export function renderClozeQuestion(text, targetIndex) {
 export function renderClozeAnswer(text, targetIndex) {
   if (!text) return '';
 
-  return text.replace(CLOZE_REGEX, (_match, index, answer) => {
+  let result = '';
+  let lastIndex = 0;
+
+  text.replace(CLOZE_REGEX, (match, index, answer, hint, offset) => {
+    result += escapeHtml(text.slice(lastIndex, offset));
     const num = parseInt(index, 10);
     if (num === targetIndex) {
-      // 対象: ハイライト表示
-      return `<span class="cloze-revealed">${escapeHtml(answer)}</span>`;
+      result += `<span class="cloze-revealed">${escapeHtml(answer)}</span>`;
+    } else {
+      result += `<span class="cloze-other">${escapeHtml(answer)}</span>`;
     }
-    // 非対象: 通常テキストとして表示
-    return `<span class="cloze-other">${escapeHtml(answer)}</span>`;
+    lastIndex = offset + match.length;
+    return '';
   });
+
+  result += escapeHtml(text.slice(lastIndex));
+  return result;
 }
 
 /**

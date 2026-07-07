@@ -2311,57 +2311,51 @@ function parseAnkiFile(content) {
 // worker/api/srs.ts
 var SRS_DEFAULT_EASE_FACTOR = 2.5;
 var SRS_MIN_EASE_FACTOR = 1.3;
-var SRS_AGAIN_INTERVAL_MINUTES = 1;
-var SRS_HARD_INTERVAL_MULTIPLIER = 1.2;
-var SRS_HARD_EASE_DELTA = -0.15;
-var SRS_EASY_EASE_DELTA = 0.15;
 function calculateNextReview(state, rating) {
   const now = /* @__PURE__ */ new Date();
   let ease = state.easeFactor ?? SRS_DEFAULT_EASE_FACTOR;
   let interval = state.intervalDays ?? 0;
   let reps = state.repetitions ?? 0;
+  let lapses = state.lapses ?? 0;
   let status = state.status ?? "new";
-  if (rating === 1 /* AGAIN */) {
-    reps = 0;
-    interval = SRS_AGAIN_INTERVAL_MINUTES / (60 * 24);
-    status = "learning";
-  } else if (rating === 2 /* HARD */) {
-    ease += SRS_HARD_EASE_DELTA;
-    if (reps === 0) {
-      interval = 1 / (60 * 24) * 10;
-    } else {
-      interval *= SRS_HARD_INTERVAL_MULTIPLIER;
-    }
-    reps += 1;
-    status = "review";
-  } else if (rating === 3 /* GOOD */) {
-    if (reps === 0) {
-      interval = 1 / 24;
+  if (interval === 0) {
+    if (rating === 1 /* AGAIN */ || rating === 2 /* HARD */) {
+      interval = 0;
+      if (rating === 1 /* AGAIN */) lapses += 1;
       status = "learning";
-    } else if (reps === 1) {
+      reps = 0;
+    } else if (rating === 3 /* GOOD */) {
       interval = 1;
       status = "review";
-    } else if (reps === 2) {
-      interval = 6;
-      status = "review";
-    } else {
-      interval *= ease;
-      status = "review";
-    }
-    reps += 1;
-  } else if (rating === 4 /* EASY */) {
-    ease += SRS_EASY_EASE_DELTA;
-    if (reps === 0) {
+      reps += 1;
+    } else if (rating === 4 /* EASY */) {
       interval = 4;
-    } else {
-      interval *= ease;
+      status = "review";
+      reps += 1;
     }
-    reps += 1;
-    status = "review";
   } else {
-    return calculateNextReview(state, 3 /* GOOD */);
+    if (rating === 1 /* AGAIN */) {
+      interval = 0;
+      ease = Math.max(SRS_MIN_EASE_FACTOR, ease - 0.2);
+      lapses += 1;
+      status = "learning";
+      reps = 0;
+    } else if (rating === 2 /* HARD */) {
+      interval = Math.max(interval + 1, interval * 1.2);
+      ease = Math.max(SRS_MIN_EASE_FACTOR, ease - 0.15);
+      status = "review";
+      reps += 1;
+    } else if (rating === 3 /* GOOD */) {
+      interval = interval * ease;
+      status = "review";
+      reps += 1;
+    } else if (rating === 4 /* EASY */) {
+      interval = interval * ease * 1.3;
+      ease += 0.15;
+      status = "review";
+      reps += 1;
+    }
   }
-  ease = Math.max(ease, SRS_MIN_EASE_FACTOR);
   const nextReviewAt = new Date(now.getTime() + interval * 24 * 60 * 60 * 1e3);
   const round = (num, decimals) => {
     const factor = Math.pow(10, decimals);
@@ -2371,6 +2365,7 @@ function calculateNextReview(state, rating) {
     easeFactor: round(ease, 4),
     intervalDays: round(interval, 4),
     repetitions: reps,
+    lapses,
     nextReviewAt,
     status
   };
@@ -2378,22 +2373,56 @@ function calculateNextReview(state, rating) {
 
 // worker/index.ts
 var app = new Hono2().basePath("/api");
-app.notFound(async (c) => {
-  return c.env.ASSETS.fetch(c.req.raw);
-});
 app.use("*", async (c, next) => {
   const expectedToken = c.env.ACCESS_TOKEN || "ankilocal-secret";
-  let token = c.req.query("token");
-  if (!token) {
-    const authHeader = c.req.header("Authorization");
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7);
+  const url = new URL(c.req.url);
+  if (url.pathname.startsWith("/api/")) {
+    let token = c.req.query("token");
+    if (!token) {
+      const authHeader = c.req.header("Authorization");
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        token = authHeader.substring(7);
+      }
+    }
+    if (token !== expectedToken) {
+      return c.json({ error: "\u8A8D\u8A3C\u30A8\u30E9\u30FC: \u7121\u52B9\u306A\u30C8\u30FC\u30AF\u30F3\u3067\u3059" }, 401);
     }
   }
-  if (token !== expectedToken) {
-    return c.json({ error: "\u8A8D\u8A3C\u30A8\u30E9\u30FC: \u7121\u52B9\u306A\u30C8\u30FC\u30AF\u30F3\u3067\u3059" }, 401);
+  try {
+    await c.env.DB.prepare("ALTER TABLE card_states ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0").run();
+  } catch (e) {
+  }
+  try {
+    await c.env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS deck_options (
+          deck_id          INTEGER PRIMARY KEY,
+          max_new_cards    INTEGER NOT NULL DEFAULT 20,
+          max_review_cards INTEGER NOT NULL DEFAULT 100,
+          review_order     TEXT NOT NULL DEFAULT 'random',
+          FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
+      )
+    `).run();
+  } catch (e) {
   }
   await next();
+});
+app.notFound(async (c) => {
+  const response = await c.env.ASSETS.fetch(c.req.raw);
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("text/html")) {
+    const token = c.env.ACCESS_TOKEN || "ankilocal-secret";
+    const html = await response.text();
+    const injected = html.replace(
+      "</head>",
+      `<script>window.__ANKI_TOKEN__ = "${token}";</script></head>`
+    );
+    return new Response(injected, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+  }
+  return response;
 });
 async function getDeckCounts(db, deckId) {
   const query = `
@@ -2421,16 +2450,26 @@ app.get("/decks", async (c) => {
     const result = [];
     for (const deck of decks) {
       const counts = await getDeckCounts(db, deck.id);
+      const options = await db.prepare("SELECT max_new_cards, max_review_cards FROM deck_options WHERE deck_id = ?").bind(deck.id).first();
+      const dailyTaskLimit = (options?.max_new_cards || 20) + (options?.max_review_cards || 100);
+      const todayStart = /* @__PURE__ */ new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayResult = await db.prepare(
+        `SELECT COUNT(*) as today FROM review_logs
+           WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?)`
+      ).bind(todayStart.toISOString(), deck.id).first();
+      const reviewsToday = todayResult?.today || 0;
+      const dailyRemaining = Math.max(0, dailyTaskLimit - reviewsToday);
       result.push({
         id: deck.id,
         name: deck.name,
         created_at: deck.created_at,
-        // フロントエンドJS (deck-list.js) が直接読み込むフラットなプロパティ
         card_count: counts.total,
         new_count: counts.new_count,
         learning_count: counts.learning_count,
         review_count: counts.review_count,
-        // バックエンドモデル互換のネストされたプロパティ
+        reviews_today: reviewsToday,
+        daily_remaining: dailyRemaining,
         card_counts: {
           total: counts.total,
           new: counts.new_count,
@@ -2549,6 +2588,40 @@ app.post("/import", async (c) => {
     return c.json({ error: `\u30A4\u30F3\u30DD\u30FC\u30C8\u30A8\u30E9\u30FC: ${err.message}` }, 500);
   }
 });
+app.get("/decks/:deckId/options", async (c) => {
+  const db = c.env.DB;
+  const deckIdStr = c.req.param("deckId");
+  const deckId = parseInt(deckIdStr, 10);
+  if (isNaN(deckId)) return c.json({ error: "\u7121\u52B9\u306A\u30C7\u30C3\u30ADID\u3067\u3059" }, 400);
+  let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order FROM deck_options WHERE deck_id = ?").bind(deckId).first();
+  if (!options) {
+    options = {
+      max_new_cards: 20,
+      max_review_cards: 100,
+      review_order: "random"
+    };
+  }
+  return c.json(options);
+});
+app.post("/decks/:deckId/options", async (c) => {
+  const db = c.env.DB;
+  const deckIdStr = c.req.param("deckId");
+  const deckId = parseInt(deckIdStr, 10);
+  if (isNaN(deckId)) return c.json({ error: "\u7121\u52B9\u306A\u30C7\u30C3\u30ADID\u3067\u3059" }, 400);
+  const body = await c.req.json();
+  const maxNew = typeof body.max_new_cards === "number" ? body.max_new_cards : 20;
+  const maxRev = typeof body.max_review_cards === "number" ? body.max_review_cards : 100;
+  const order = body.review_order === "sequential" ? "sequential" : "random";
+  await db.prepare(`
+    INSERT INTO deck_options (deck_id, max_new_cards, max_review_cards, review_order)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(deck_id) DO UPDATE SET
+      max_new_cards = excluded.max_new_cards,
+      max_review_cards = excluded.max_review_cards,
+      review_order = excluded.review_order
+  `).bind(deckId, maxNew, maxRev, order).run();
+  return c.json({ success: true });
+});
 app.get("/decks/:deckId/study", async (c) => {
   const db = c.env.DB;
   const deckId = parseInt(c.req.param("deckId"), 10);
@@ -2560,40 +2633,40 @@ app.get("/decks/:deckId/study", async (c) => {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     const batchSize = 20;
     const cards = [];
-    const { results: newCards } = await db.prepare(
-      `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.status, cs.next_review_at
-         FROM cards c
-         JOIN card_states cs ON c.id = cs.card_id
-         WHERE c.deck_id = ? AND cs.status = 'new'
-         ORDER BY c.id
-         LIMIT ?`
-    ).bind(deckId, batchSize).all();
-    cards.push(...newCards);
-    if (cards.length < batchSize) {
-      const remaining = batchSize - cards.length;
-      const { results: learningCards } = await db.prepare(
-        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.status, cs.next_review_at
+    let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order FROM deck_options WHERE deck_id = ?").bind(deckId).first();
+    if (!options) {
+      options = { max_new_cards: 20, max_review_cards: 100, review_order: "random" };
+    }
+    const newBatchSize = options.max_new_cards;
+    if (newBatchSize > 0) {
+      const { results: newCards } = await db.prepare(
+        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
            JOIN card_states cs ON c.id = cs.card_id
-           WHERE c.deck_id = ? AND cs.status = 'learning'
+           WHERE c.deck_id = ? AND cs.status = 'new'
+           ORDER BY c.id
+           LIMIT ?`
+      ).bind(deckId, newBatchSize).all();
+      cards.push(...newCards);
+    }
+    const reviewBatchSize = options.max_review_cards;
+    if (reviewBatchSize > 0) {
+      const { results: reviewCards } = await db.prepare(
+        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
+           FROM cards c
+           JOIN card_states cs ON c.id = cs.card_id
+           WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
              AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)
            ORDER BY cs.next_review_at
            LIMIT ?`
-      ).bind(deckId, nowIso, remaining).all();
-      cards.push(...learningCards);
-    }
-    if (cards.length < batchSize) {
-      const remaining = batchSize - cards.length;
-      const { results: reviewCards } = await db.prepare(
-        `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.status, cs.next_review_at
-           FROM cards c
-           JOIN card_states cs ON c.id = cs.card_id
-           WHERE c.deck_id = ? AND cs.status = 'review'
-             AND cs.next_review_at <= ?
-           ORDER BY cs.next_review_at
-           LIMIT ?`
-      ).bind(deckId, nowIso, remaining).all();
+      ).bind(deckId, nowIso, reviewBatchSize).all();
       cards.push(...reviewCards);
+    }
+    if (options.review_order === "random") {
+      for (let i = cards.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [cards[i], cards[j]] = [cards[j], cards[i]];
+      }
     }
     return c.json(
       cards.map((row) => ({
@@ -2610,6 +2683,7 @@ app.get("/decks/:deckId/study", async (c) => {
         ease_factor: row.ease_factor,
         interval_days: row.interval_days,
         repetitions: row.repetitions,
+        lapses: row.lapses,
         status: row.status,
         next_review_at: row.next_review_at
       }))
@@ -2626,7 +2700,7 @@ app.post("/cards/:cardId/review", async (c) => {
     if (!rating || rating < 1 || rating > 4) {
       return c.json({ error: "\u4E0D\u6B63\u306A\u8A55\u4FA1\u5024\u3067\u3059 (1-4)" }, 400);
     }
-    const stateRow = await db.prepare("SELECT ease_factor, interval_days, repetitions, status FROM card_states WHERE card_id = ?").bind(cardId).first();
+    const stateRow = await db.prepare("SELECT ease_factor, interval_days, repetitions, lapses, status FROM card_states WHERE card_id = ?").bind(cardId).first();
     if (!stateRow) {
       return c.json({ error: "\u30AB\u30FC\u30C9\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093" }, 404);
     }
@@ -2635,6 +2709,7 @@ app.post("/cards/:cardId/review", async (c) => {
         easeFactor: stateRow.ease_factor,
         intervalDays: stateRow.interval_days,
         repetitions: stateRow.repetitions,
+        lapses: stateRow.lapses,
         status: stateRow.status
       },
       rating
@@ -2644,13 +2719,14 @@ app.post("/cards/:cardId/review", async (c) => {
     await db.batch([
       db.prepare(
         `UPDATE card_states
-         SET ease_factor = ?, interval_days = ?, repetitions = ?,
+         SET ease_factor = ?, interval_days = ?, repetitions = ?, lapses = ?,
              next_review_at = ?, last_reviewed_at = ?, status = ?
          WHERE card_id = ?`
       ).bind(
         result.easeFactor,
         result.intervalDays,
         result.repetitions,
+        result.lapses,
         nextReviewIso,
         nowIso,
         result.status,
@@ -2664,6 +2740,7 @@ app.post("/cards/:cardId/review", async (c) => {
       ease_factor: result.easeFactor,
       interval_days: result.intervalDays,
       repetitions: result.repetitions,
+      lapses: result.lapses,
       next_review_at: nextReviewIso,
       status: result.status
     });
