@@ -2449,24 +2449,25 @@ async function getDeckCounts(db, deckId) {
   };
 }
 async function getStudyableCount(db, deckId, excludedTags) {
-  const tagList = excludedTags ? excludedTags.trim().split(/\s+/).filter(Boolean) : [];
-  if (tagList.length === 0) {
+  const excludedList = excludedTags ? excludedTags.trim().split(/\s+/).filter(Boolean) : [];
+  if (excludedList.length === 0) {
     const counts = await getDeckCounts(db, deckId);
     return counts.total;
   }
   const { results: allRows } = await db.prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''").bind(deckId).all();
-  const uniqueTags = /* @__PURE__ */ new Set();
+  const allTags = /* @__PURE__ */ new Set();
   for (const row of allRows) {
     for (const tag of row.tags.trim().split(/\s+/)) {
-      if (tag) uniqueTags.add(tag);
+      if (tag) allTags.add(tag);
     }
   }
-  if (uniqueTags.size > 0 && tagList.length >= uniqueTags.size) return 0;
-  const conditions = tagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
-  const params = tagList.map((t) => ` ${t} `);
+  const includedTags = [...allTags].filter((t) => !excludedList.includes(t));
+  if (includedTags.length === 0) return 0;
+  const conditions = includedTags.map(() => `INSTR(' ' || c.tags || ' ', ?) > 0`);
+  const params = includedTags.map((t) => ` ${t} `);
   const result = await db.prepare(`
     SELECT COUNT(*) as total FROM cards c
-    WHERE c.deck_id = ? AND (c.tags = '' OR (${conditions.join(" AND ")}))
+    WHERE c.deck_id = ? AND (${conditions.join(" OR ")})
   `).bind(deckId, ...params).first();
   return result?.total || 0;
 }
@@ -2692,9 +2693,21 @@ app.get("/decks/:deckId/study", async (c) => {
     let tagFilterSql = "";
     const tagFilterParams = [];
     if (excludedTagList.length > 0) {
-      const conditions = excludedTagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
-      tagFilterParams.push(...excludedTagList.map((t) => ` ${t} `));
-      tagFilterSql = ` AND (c.tags = '' OR (${conditions.join(" AND ")}))`;
+      const { results: tagRows } = await db.prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''").bind(deckId).all();
+      const allTags = /* @__PURE__ */ new Set();
+      for (const row of tagRows) {
+        for (const t of row.tags.trim().split(/\s+/)) {
+          if (t) allTags.add(t);
+        }
+      }
+      const includedTags = [...allTags].filter((t) => !excludedTagList.includes(t));
+      if (includedTags.length > 0) {
+        const conditions = includedTags.map(() => `INSTR(' ' || c.tags || ' ', ?) > 0`);
+        tagFilterParams.push(...includedTags.map((t) => ` ${t} `));
+        tagFilterSql = ` AND (${conditions.join(" OR ")})`;
+      } else {
+        tagFilterSql = " AND 1=0";
+      }
     }
     const newBatchSize = options.max_new_cards;
     if (newBatchSize > 0) {

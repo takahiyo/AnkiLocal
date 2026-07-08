@@ -324,7 +324,7 @@ async function saveOptions() {
   const maxRev = parseInt(document.getElementById('option-review-cards').value, 10);
   const order = document.getElementById('option-review-order').value;
 
-  // チェックが外れているタグ = 出題対象外
+  // チェックが外れているタグを除外対象として保存
   const excludedTags = [];
   document.querySelectorAll('#tag-checklist .tag-checklist-item input[type="checkbox"]').forEach(cb => {
     if (!cb.checked) {

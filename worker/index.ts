@@ -108,33 +108,37 @@ async function getDeckCounts(db: D1Database, deckId: number) {
 }
 
 /**
- * 除外タグを考慮したカード数を取得する
+ * 出題タグ（包含）を考慮したカード数を取得する
+ * チェックされたタグのいずれかを持っているカードをカウント（OR）
  */
 async function getStudyableCount(db: D1Database, deckId: number, excludedTags: string) {
-  const tagList = excludedTags ? excludedTags.trim().split(/\s+/).filter(Boolean) : [];
-  if (tagList.length === 0) {
+  const excludedList = excludedTags ? excludedTags.trim().split(/\s+/).filter(Boolean) : [];
+  if (excludedList.length === 0) {
     const counts = await getDeckCounts(db, deckId);
     return counts.total;
   }
 
-  // 全タグが除外されている場合は0
+  // 全ユニークタグを取得
   const { results: allRows } = await db
     .prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''")
     .bind(deckId)
     .all<{ tags: string }>();
-  const uniqueTags = new Set<string>();
+  const allTags = new Set<string>();
   for (const row of allRows) {
     for (const tag of row.tags.trim().split(/\s+/)) {
-      if (tag) uniqueTags.add(tag);
+      if (tag) allTags.add(tag);
     }
   }
-  if (uniqueTags.size > 0 && tagList.length >= uniqueTags.size) return 0;
 
-  const conditions = tagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
-  const params: any[] = tagList.map(t => ` ${t} `);
+  // 包含タグ = 全タグ − 除外タグ
+  const includedTags = [...allTags].filter(t => !excludedList.includes(t));
+  if (includedTags.length === 0) return 0;
+
+  const conditions = includedTags.map(() => `INSTR(' ' || c.tags || ' ', ?) > 0`);
+  const params: any[] = includedTags.map(t => ` ${t} `);
   const result = await db.prepare(`
     SELECT COUNT(*) as total FROM cards c
-    WHERE c.deck_id = ? AND (c.tags = '' OR (${conditions.join(' AND ')}))
+    WHERE c.deck_id = ? AND (${conditions.join(' OR ')})
   `).bind(deckId, ...params).first<{ total: number }>();
   return result?.total || 0;
 }
@@ -455,14 +459,31 @@ app.get("/decks/:deckId/study", async (c) => {
       options = { max_new_cards: 20, max_review_cards: 100, review_order: 'random', excluded_tags: '' };
     }
 
-    // 除外タグ条件を構築
+    // 除外タグの代わりに包含タグ（OR）条件を構築
     const excludedTagList = options.excluded_tags ? options.excluded_tags.trim().split(/\s+/).filter(Boolean) : [];
     let tagFilterSql = '';
     const tagFilterParams: any[] = [];
     if (excludedTagList.length > 0) {
-      const conditions = excludedTagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
-      tagFilterParams.push(...excludedTagList.map(t => ` ${t} `));
-      tagFilterSql = ` AND (c.tags = '' OR (${conditions.join(' AND ')}))`;
+      // 全ユニークタグを取得して包含タグを算出
+      const { results: tagRows } = await db
+        .prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''")
+        .bind(deckId)
+        .all<{ tags: string }>();
+      const allTags = new Set<string>();
+      for (const row of tagRows) {
+        for (const t of row.tags.trim().split(/\s+/)) {
+          if (t) allTags.add(t);
+        }
+      }
+      const includedTags = [...allTags].filter(t => !excludedTagList.includes(t));
+      if (includedTags.length > 0) {
+        const conditions = includedTags.map(() => `INSTR(' ' || c.tags || ' ', ?) > 0`);
+        tagFilterParams.push(...includedTags.map(t => ` ${t} `));
+        tagFilterSql = ` AND (${conditions.join(' OR ')})`;
+      } else {
+        // 包含タグがない = 全タグ除外 → 空結果
+        tagFilterSql = ' AND 1=0';
+      }
     }
 
     // 1. new カード
