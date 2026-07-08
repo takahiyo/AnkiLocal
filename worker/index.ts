@@ -396,17 +396,20 @@ app.get("/decks/:deckId/tags", async (c) => {
 
   try {
     const { results: rows } = await db
-      .prepare("SELECT DISTINCT tags FROM cards WHERE deck_id = ? AND tags != ''")
+      .prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''")
       .bind(deckId)
       .all<{ tags: string }>();
 
-    const tagSet = new Set<string>();
+    const tagCount: Record<string, number> = {};
     for (const row of rows) {
-      for (const tag of row.tags.trim().split(/\s+/)) {
-        if (tag) tagSet.add(tag);
+      const tags = row.tags.trim().split(/\s+/);
+      for (const tag of tags) {
+        if (tag) tagCount[tag] = (tagCount[tag] || 0) + 1;
       }
     }
-    const sorted = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+    const sorted = Object.entries(tagCount)
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => a.tag.localeCompare(b.tag));
     return c.json(sorted);
   } catch (err: any) {
     return c.json({ error: `タグ取得エラー: ${err.message}` }, 500);

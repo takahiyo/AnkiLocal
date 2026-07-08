@@ -2651,14 +2651,15 @@ app.get("/decks/:deckId/tags", async (c) => {
   const deckId = parseInt(c.req.param("deckId"), 10);
   if (isNaN(deckId)) return c.json({ error: "\u7121\u52B9\u306A\u30C7\u30C3\u30ADID\u3067\u3059" }, 400);
   try {
-    const { results: rows } = await db.prepare("SELECT DISTINCT tags FROM cards WHERE deck_id = ? AND tags != ''").bind(deckId).all();
-    const tagSet = /* @__PURE__ */ new Set();
+    const { results: rows } = await db.prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''").bind(deckId).all();
+    const tagCount = {};
     for (const row of rows) {
-      for (const tag of row.tags.trim().split(/\s+/)) {
-        if (tag) tagSet.add(tag);
+      const tags = row.tags.trim().split(/\s+/);
+      for (const tag of tags) {
+        if (tag) tagCount[tag] = (tagCount[tag] || 0) + 1;
       }
     }
-    const sorted = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+    const sorted = Object.entries(tagCount).map(([tag, count]) => ({ tag, count })).sort((a, b) => a.tag.localeCompare(b.tag));
     return c.json(sorted);
   } catch (err) {
     return c.json({ error: `\u30BF\u30B0\u53D6\u5F97\u30A8\u30E9\u30FC: ${err.message}` }, 500);

@@ -58,7 +58,7 @@ function renderDeckCard(deck) {
         <div>
           <div class="deck-card-name">${escapeHtml(deck.name)}</div>
           <div class="deck-card-count">${studyableCount !== total
-            ? `全${total}枚 / <span style="color: var(--accent-primary);">出題 ${studyableCount}枚</span>`
+            ? `全${total}枚 / <span style="color: var(--accent-primary);">出題 ${studyableCount}枚</span> / <span style="color: var(--color-warning);">除外 ${total - studyableCount}枚</span>`
             : `${total}枚のカード`}</div>
         </div>
         <div>
@@ -278,12 +278,12 @@ function renderTagChecklist(tags, excludedSet) {
 
   if (emptyMsg) emptyMsg.classList.add('hidden');
 
-  container.innerHTML = tags.map(tag => {
+  container.innerHTML = tags.map(({ tag, count }) => {
     const checked = !excludedSet.has(tag);
     return `
       <div class="tag-checklist-item">
         <input type="checkbox" id="tag-chk-${escapeHtml(tag)}" value="${escapeHtml(tag)}" ${checked ? 'checked' : ''}>
-        <label for="tag-chk-${escapeHtml(tag)}">${escapeHtml(tag)}</label>
+        <label for="tag-chk-${escapeHtml(tag)}">${escapeHtml(tag)} <span class="tag-count">(${count})</span></label>
       </div>
     `;
   }).join('');
