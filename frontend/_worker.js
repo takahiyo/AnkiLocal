@@ -2449,13 +2449,13 @@ async function getDeckCounts(db, deckId) {
   };
 }
 async function getStudyableCount(db, deckId, excludedTags) {
-  const tagList = excludedTags ? excludedTags.trim().split(/\s+/) : [];
+  const tagList = excludedTags ? excludedTags.trim().split(/\s+/).filter(Boolean) : [];
   if (tagList.length === 0) {
     const counts = await getDeckCounts(db, deckId);
     return counts.total;
   }
-  const conditions = tagList.map(() => `(' ' || c.tags || ' ') NOT LIKE ?`);
-  const params = tagList.map((t) => `% ${t} %`);
+  const conditions = tagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
+  const params = tagList.map((t) => ` ${t} `);
   const result = await db.prepare(`
     SELECT COUNT(*) as total FROM cards c
     WHERE c.deck_id = ? AND (c.tags = '' OR (${conditions.join(" AND ")}))
@@ -2499,7 +2499,7 @@ app.get("/decks", async (c) => {
         }
       });
     }
-    return c.json(result);
+    return c.json(result, 200, { "Cache-Control": "no-store, no-cache, must-revalidate" });
   } catch (err) {
     return c.json({ error: `\u30C7\u30C3\u30AD\u4E00\u89A7\u53D6\u5F97\u30A8\u30E9\u30FC: ${err.message}` }, 500);
   }
@@ -2679,12 +2679,12 @@ app.get("/decks/:deckId/study", async (c) => {
     if (!options) {
       options = { max_new_cards: 20, max_review_cards: 100, review_order: "random", excluded_tags: "" };
     }
-    const excludedTagList = options.excluded_tags ? options.excluded_tags.trim().split(/\s+/) : [];
+    const excludedTagList = options.excluded_tags ? options.excluded_tags.trim().split(/\s+/).filter(Boolean) : [];
     let tagFilterSql = "";
     const tagFilterParams = [];
     if (excludedTagList.length > 0) {
-      const conditions = excludedTagList.map(() => `(' ' || c.tags || ' ') NOT LIKE ?`);
-      tagFilterParams.push(...excludedTagList.map((t) => `% ${t} %`));
+      const conditions = excludedTagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
+      tagFilterParams.push(...excludedTagList.map((t) => ` ${t} `));
       tagFilterSql = ` AND (c.tags = '' OR (${conditions.join(" AND ")}))`;
     }
     const newBatchSize = options.max_new_cards;

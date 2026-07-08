@@ -111,13 +111,13 @@ async function getDeckCounts(db: D1Database, deckId: number) {
  * 除外タグを考慮したカード数を取得する
  */
 async function getStudyableCount(db: D1Database, deckId: number, excludedTags: string) {
-  const tagList = excludedTags ? excludedTags.trim().split(/\s+/) : [];
+  const tagList = excludedTags ? excludedTags.trim().split(/\s+/).filter(Boolean) : [];
   if (tagList.length === 0) {
     const counts = await getDeckCounts(db, deckId);
     return counts.total;
   }
-  const conditions = tagList.map(() => `(' ' || c.tags || ' ') NOT LIKE ?`);
-  const params: any[] = tagList.map(t => `% ${t} %`);
+  const conditions = tagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
+  const params: any[] = tagList.map(t => ` ${t} `);
   const result = await db.prepare(`
     SELECT COUNT(*) as total FROM cards c
     WHERE c.deck_id = ? AND (c.tags = '' OR (${conditions.join(' AND ')}))
@@ -184,7 +184,7 @@ app.get("/decks", async (c) => {
       });
     }
 
-    return c.json(result);
+    return c.json(result, 200, { 'Cache-Control': 'no-store, no-cache, must-revalidate' });
   } catch (err: any) {
     return c.json({ error: `デッキ一覧取得エラー: ${err.message}` }, 500);
   }
@@ -439,12 +439,12 @@ app.get("/decks/:deckId/study", async (c) => {
     }
 
     // 除外タグ条件を構築
-    const excludedTagList = options.excluded_tags ? options.excluded_tags.trim().split(/\s+/) : [];
+    const excludedTagList = options.excluded_tags ? options.excluded_tags.trim().split(/\s+/).filter(Boolean) : [];
     let tagFilterSql = '';
     const tagFilterParams: any[] = [];
     if (excludedTagList.length > 0) {
-      const conditions = excludedTagList.map(() => `(' ' || c.tags || ' ') NOT LIKE ?`);
-      tagFilterParams.push(...excludedTagList.map(t => `% ${t} %`));
+      const conditions = excludedTagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
+      tagFilterParams.push(...excludedTagList.map(t => ` ${t} `));
       tagFilterSql = ` AND (c.tags = '' OR (${conditions.join(' AND ')}))`;
     }
 
