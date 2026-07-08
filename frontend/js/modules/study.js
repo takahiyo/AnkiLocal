@@ -48,6 +48,7 @@ export async function startStudySession(deckId) {
   _currentDeckId = deckId;
   _currentIndex = 0;
   _isFlipped = false;
+  _isProcessing = false;
   _cards = [];
 
   // UIリセット
@@ -58,6 +59,7 @@ export async function startStudySession(deckId) {
 
   try {
     _cards = await fetchStudyCards(deckId);
+    console.log(`[Study] Loaded ${_cards.length} cards, first card_id=${_cards[0]?.id}`);
 
     // デッキ名を取得して表示
     try {
@@ -72,6 +74,7 @@ export async function startStudySession(deckId) {
     }
 
     if (!_cards || _cards.length === 0) {
+      console.log('[Study] No cards, showing complete');
       showComplete();
       return;
     }
@@ -88,33 +91,27 @@ export async function startStudySession(deckId) {
  * 現在のカードを表示する（表面）。
  */
 function showCard() {
+  console.log(`[Study] showCard: _currentIndex=${_currentIndex}, _cards.length=${_cards.length}, _isFlipped=${_isFlipped}, _isProcessing=${_isProcessing}`);
+
   if (_currentIndex >= _cards.length) {
+    console.log('[Study] Index out of range, showing complete');
     showComplete();
     return;
   }
 
   const card = _cards[_currentIndex];
+  if (!card) {
+    console.error('[Study] Card is undefined at index', _currentIndex);
+    showToast('カードデータの読み込みに失敗しました', 'error');
+    return;
+  }
+
+  console.log(`[Study] Showing card id=${card.id}, note_type=${card.note_type}, front.length=${(card.front||'').length}`);
+
   _isFlipped = false;
+  _isProcessing = false;
 
-  const container = $(STUDY_IDS.CARD_CONTAINER);
-
-  // カード切替時にtransitionを無効化して強制的に表面に戻す
-  const inner = container?.querySelector('.study-card-inner');
-  if (inner) {
-    inner.style.transition = 'none';
-    inner.style.transform = '';
-    void inner.offsetHeight;
-    inner.style.transition = '';
-  }
-  if (container) {
-    container.classList.remove('flipped', 'next-card-anim');
-    void container.offsetHeight;
-    container.classList.add('next-card-anim');
-    setTimeout(() => {
-      container.classList.remove('next-card-anim');
-    }, 400);
-  }
-
+  // 最初にカードコンテンツを更新（旧コンテンツが残らないように）
   const { frontHtml, backHtml, metaText } = renderCardContent(card);
 
   const frontText = $(STUDY_IDS.CARD_FRONT_TEXT);
@@ -124,6 +121,17 @@ function showCard() {
   if (frontText) frontText.innerHTML = frontHtml;
   if (backText) backText.innerHTML = backHtml;
   if (meta) meta.textContent = metaText;
+
+  // 次にアニメーション状態をリセット
+  const container = $(STUDY_IDS.CARD_CONTAINER);
+  if (container) {
+    container.classList.remove('flipped', 'next-card-anim');
+    void container.offsetHeight;
+    container.classList.add('next-card-anim');
+    setTimeout(() => {
+      container.classList.remove('next-card-anim');
+    }, 400);
+  }
 
   const showAnswerBtn = $(STUDY_IDS.SHOW_ANSWER_BTN);
   const ratingButtons = $(STUDY_IDS.RATING_BUTTONS);
@@ -191,6 +199,7 @@ function flipCard() {
   if (_isFlipped || _currentIndex >= _cards.length) return;
 
   _isFlipped = true;
+  console.log(`[Study] flipCard: index=${_currentIndex}, card_id=${_cards[_currentIndex]?.id}`);
 
   // 3Dフリップアニメーション発動 (縦)
   const container = $(STUDY_IDS.CARD_CONTAINER);
@@ -215,29 +224,46 @@ function flipCard() {
  * @param {number} rating - 評価値（1-4）
  */
 async function handleRating(rating) {
-  if (_isProcessing || _currentIndex >= _cards.length) return;
+  if (_isProcessing || _currentIndex >= _cards.length) {
+    console.log(`[Study] handleRating blocked: _isProcessing=${_isProcessing}, _currentIndex=${_currentIndex}, _cards.length=${_cards.length}`);
+    return;
+  }
 
   _isProcessing = true;
   const card = _cards[_currentIndex];
 
+  if (!card) {
+    console.error('[Study] handleRating: card is undefined at index', _currentIndex);
+    _isProcessing = false;
+    return;
+  }
+
+  console.log(`[Study] handleRating: rating=${rating}, card_id=${card.id}, index=${_currentIndex}`);
+  console.log(`[Study]   front preview: ${(card.front||'').substring(0, 50)}`);
+
   try {
-    await submitReview(card.id, rating);
-    
+    const result = await submitReview(card.id, rating);
+    console.log(`[Study] Review submitted OK: card_id=${result.card_id}, status=${result.status}`);
+
     // Again(1)の場合はキューの末尾に再追加 (今日中に再出題)
     if (rating === 1) {
-      _cards.push({
+      const cloneCard = {
         ...card,
         interval_days: 0,
         repetitions: 0,
         status: 'learning'
-      });
+      };
+      _cards.push(cloneCard);
+      console.log(`[Study] Re-added card ${card.id} to queue end, queue now ${_cards.length}`);
     }
 
     _currentIndex++;
+    console.log(`[Study] Advancing to index ${_currentIndex} (total ${_cards.length})`);
+
     showCard();
   } catch (err) {
+    console.error('[Study] Review submission failed:', err);
     showToast(`レビューの送信に失敗しました: ${err.message}`, 'error');
-  } finally {
     _isProcessing = false;
   }
 }
