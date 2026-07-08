@@ -125,6 +125,16 @@ function showCard() {
   // 次にアニメーション状態をリセット
   const container = $(STUDY_IDS.CARD_CONTAINER);
   if (container) {
+    // transitionを無効化して強制的に表面にスナップさせる
+    // これがないと flipped 削除時のCSS transition (0.6s) と
+    // next-card-anim の keyframe animation (0.4s) が競合して表示が崩れる
+    const inner = container.querySelector('.study-card-inner');
+    if (inner) {
+      inner.style.transition = 'none';
+      inner.style.transform = '';
+      void inner.offsetHeight;
+      inner.style.transition = '';
+    }
     container.classList.remove('flipped', 'next-card-anim');
     void container.offsetHeight;
     container.classList.add('next-card-anim');
