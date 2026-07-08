@@ -116,7 +116,7 @@ function showCard() {
   _isFlipped = false;
   _isProcessing = false;
 
-  // 最初にカードコンテンツを更新（旧コンテンツが残らないように）
+  // 最初にカードコンテンツを更新
   const { frontHtml, backHtml, metaText } = renderCardContent(card);
 
   const frontText = $(STUDY_IDS.CARD_FRONT_TEXT);
@@ -127,31 +127,15 @@ function showCard() {
   if (backText) backText.innerHTML = backHtml;
   if (meta) meta.textContent = metaText;
 
-  // 次にアニメーション状態をリセット
+  // アニメーション: flipped解除 → 前面表示 → next-card-anim でフェードイン
   const container = $(STUDY_IDS.CARD_CONTAINER);
   if (container) {
-    // 前回の next-card-anim 解除タイマーを確実にキャンセル
     if (_animTimeoutId !== null) {
       clearTimeout(_animTimeoutId);
       _animTimeoutId = null;
     }
 
-    // transitionを無効化して強制的に表面にスナップさせる
-    const inner = container.querySelector('.study-card-inner');
-    if (inner) {
-      inner.style.transition = 'none';
-      inner.style.transform = 'none';  // <-- 'none' でCSSの rotateX(180deg) をinline上書き
-      void inner.offsetHeight;         // reflow: 即座に前面へスナップ
-    }
-
-    // flippedを解除（inlineが効いているので既に前面だが、クリーンに）
     container.classList.remove('flipped', 'next-card-anim');
-
-    // inline解除 → 次のカード演出に移行
-    if (inner) {
-      inner.style.transform = '';      // inline削除
-      inner.style.transition = '';     // transition再開
-    }
     void container.offsetHeight;
     container.classList.add('next-card-anim');
 
@@ -229,7 +213,6 @@ function flipCard() {
   _isFlipped = true;
   console.log(`[Study] flipCard: index=${_currentIndex}, card_id=${_cards[_currentIndex]?.id}`);
 
-  // 3Dフリップアニメーション発動 (縦)
   const container = $(STUDY_IDS.CARD_CONTAINER);
   if (container) container.classList.add('flipped');
 
