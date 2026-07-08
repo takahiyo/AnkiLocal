@@ -53,7 +53,7 @@ export async function startStudySession(deckId) {
   // UIリセット
   const cardSection = $(STUDY_IDS.CARD_SECTION);
   const completeSection = $(STUDY_IDS.COMPLETE_SECTION);
-  if (cardSection) cardSection.classList.remove('hidden');
+  if (cardSection) cardSection.classList.add('hidden');
   if (completeSection) completeSection.classList.add('hidden');
 
   try {
@@ -76,6 +76,8 @@ export async function startStudySession(deckId) {
       return;
     }
 
+    // データ準備ができてからカード表示領域を表示し、最初のカードを描画
+    if (cardSection) cardSection.classList.remove('hidden');
     showCard();
   } catch (err) {
     showToast(`カードの取得に失敗しました: ${err.message}`, 'error');
