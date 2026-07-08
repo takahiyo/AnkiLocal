@@ -1,7 +1,7 @@
 /**
  * main.js - アプリケーションのエントリーポイント
  *
- * アプリケーションの初期化、ルーティング設定、認証トークンの確認を行います。
+ * アプリケーションの初期化、ルーティング設定、認証フローを行います。
  *
  * 依存:
  *   - js/services/api.js (API通信)
@@ -13,55 +13,36 @@
  *   - js/constants/dom.js (DOM ID定義)
  */
 
-import { init as initApi, setToken } from './services/api.js';
+import { init as initApi, setToken, getToken } from './services/api.js';
+import { login, register, logout } from './services/api.js';
 import { init as initRouter, navigateTo, replaceRoute, onRouteChange } from './modules/router.js';
 import { init as initDeckList, loadDeckList } from './modules/deck-list.js';
 import { init as initStudy, startStudySession } from './modules/study.js';
 import { init as initStats, loadStats } from './modules/stats.js';
 import { init as initImport, resetView as resetImportView } from './modules/import.js';
-import { NAV_IDS } from './constants/dom.js';
+import { init as initAdmin, resetView as resetAdminView } from './modules/admin.js';
+import { NAV_IDS, AUTH_IDS } from './constants/dom.js';
 
 document.addEventListener('DOMContentLoaded', () => {
-    // 1. 認証トークンを次の優先順位で取得:
-    //    サーバー埋め込み → URLクエリ → ローカルストレージ
-    let token = window.__ANKI_TOKEN__;
-    if (!token) {
-        const urlParams = new URLSearchParams(window.location.search);
-        token = urlParams.get('token');
-    }
-    if (token) {
-        localStorage.setItem('anki_local_token', token);
-    } else {
-        token = localStorage.getItem('anki_local_token');
-    }
-
-    // トークンが無い場合は警告を表示して処理を止める (セキュリティ保護)
-    if (!token) {
-        showTokenError();
-        return;
-    }
-
-    // 2. 認証トークンをAPIサービスにセット
-    setToken(token);
-
-    // 3. 各モジュール・サービスの初期化 (依存注入)
-    const context = {
-        // 必要に応じて共有インスタンスや設定を注入可能
-        token: token
-    };
-
-    // グローバルなトースト表示関数の設定
     setupToast();
+    setupAuth();
+    setupNavigation();
+    setupLogout();
 
-    initApi(context);
-    initDeckList(context);
-    initStudy(context);
-    initStats(context);
-    initImport(context);
-    
-    // ルーターのコールバックを登録
+    initApi({});
+
+    initDeckList({});
+    initStudy({});
+    initStats({});
+    initImport({});
+    initAdmin({});
+
     onRouteChange((route, params) => {
-        console.log(`[Router] Route changed to: ${route}`, params);
+        if (route === '/login' || route === '/register') return;
+        if (!getToken()) {
+            replaceRoute('/login');
+            return;
+        }
         if (route === '/decks') {
             loadDeckList();
         } else if (route === '/study') {
@@ -74,15 +55,205 @@ document.addEventListener('DOMContentLoaded', () => {
             loadStats();
         } else if (route === '/import') {
             resetImportView();
+        } else if (route === '/admin') {
+            resetAdminView();
         }
     });
 
-    // ルーターは最後に初期化し、初期画面に遷移
-    initRouter(context);
-
-    // ナビゲーションメニューのイベントハンドラ登録
-    setupNavigation(token);
+    initRouter();
 });
+
+/**
+ * 認証フローのセットアップ
+ */
+function setupAuth() {
+    const LS_TOKEN = 'anki_local_token';
+    const LS_IS_ADMIN = 'anki_local_is_admin';
+
+    // 保存済みトークンがあれば復元
+    const savedToken = localStorage.getItem(LS_TOKEN);
+    if (savedToken) {
+        setToken(savedToken);
+
+        // 管理者状態を復元
+        const savedIsAdmin = localStorage.getItem(LS_IS_ADMIN);
+        if (savedIsAdmin === 'true') {
+            showNavbar(true);
+        } else {
+            showNavbar(false);
+        }
+    } else {
+        showNavbar(false);
+    }
+
+    // ログインフォーム
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById(AUTH_IDS.LOGIN_USERNAME).value.trim();
+            const password = document.getElementById(AUTH_IDS.LOGIN_PASSWORD).value;
+            const errorEl = document.getElementById(AUTH_IDS.LOGIN_ERROR);
+            const submitBtn = document.getElementById(AUTH_IDS.LOGIN_SUBMIT);
+
+            if (!username) {
+                showAuthError(errorEl, 'IDを入力してください');
+                return;
+            }
+
+            hideAuthError(errorEl);
+            submitBtn.disabled = true;
+            submitBtn.textContent = '処理中...';
+
+            try {
+                const result = await login(username, password);
+
+                if (result.success) {
+                    onLoginSuccess(result);
+                } else if (result.status === 'new_account') {
+                    // 新規アカウント作成画面へ
+                    navigateTo(`/register/${encodeURIComponent(result.username)}`);
+                }
+            } catch (err) {
+                showAuthError(errorEl, err.message);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'ログイン';
+            }
+        });
+    }
+
+    // 登録フォーム
+    const registerForm = document.getElementById('register-form');
+    if (registerForm) {
+        registerForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById(AUTH_IDS.REGISTER_USERNAME_DISPLAY).textContent;
+            const password = document.getElementById(AUTH_IDS.REGISTER_PASSWORD).value;
+            const passwordConfirm = document.getElementById(AUTH_IDS.REGISTER_PASSWORD_CONFIRM).value;
+            const errorEl = document.getElementById(AUTH_IDS.REGISTER_ERROR);
+            const submitBtn = document.getElementById(AUTH_IDS.REGISTER_SUBMIT);
+
+            hideAuthError(errorEl);
+
+            if (!password) {
+                showAuthError(errorEl, 'パスワードを入力してください');
+                return;
+            }
+            if (password !== passwordConfirm) {
+                showAuthError(errorEl, 'パスワードが一致しません');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = '作成中...';
+
+            try {
+                const result = await register(username, password);
+                if (result.success) {
+                    onLoginSuccess(result);
+                }
+            } catch (err) {
+                showAuthError(errorEl, err.message);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'アカウント作成';
+            }
+        });
+    }
+
+    // 登録画面の戻るボタン
+    const registerBackBtn = document.getElementById(AUTH_IDS.REGISTER_BACK);
+    if (registerBackBtn) {
+        registerBackBtn.addEventListener('click', () => {
+            navigateTo('/login');
+        });
+    }
+
+    // register/:username ルートの処理
+    onRouteChange((route, params) => {
+        if (route === '/register' && params.username) {
+            const displayEl = document.getElementById(AUTH_IDS.REGISTER_USERNAME_DISPLAY);
+            if (displayEl) {
+                displayEl.textContent = decodeURIComponent(params.username);
+            }
+            // パスワードフィールドをクリア
+            document.getElementById(AUTH_IDS.REGISTER_PASSWORD).value = '';
+            document.getElementById(AUTH_IDS.REGISTER_PASSWORD_CONFIRM).value = '';
+            hideAuthError(document.getElementById(AUTH_IDS.REGISTER_ERROR));
+        }
+        if (route === '/login') {
+            hideAuthError(document.getElementById(AUTH_IDS.LOGIN_ERROR));
+        }
+    });
+}
+
+function onLoginSuccess(result) {
+    const LS_TOKEN = 'anki_local_token';
+    const LS_IS_ADMIN = 'anki_local_is_admin';
+
+    localStorage.setItem(LS_TOKEN, result.token);
+    setToken(result.token);
+
+    if (result.is_admin) {
+        localStorage.setItem(LS_IS_ADMIN, 'true');
+        showNavbar(true);
+    } else {
+        localStorage.setItem(LS_IS_ADMIN, 'false');
+        showNavbar(false);
+    }
+
+    // メイン画面へ
+    replaceRoute('/decks');
+}
+
+function showNavbar(isAdmin) {
+    const navbar = document.getElementById('app-navbar');
+    if (navbar) navbar.style.display = 'flex';
+
+    const importLink = document.getElementById(NAV_IDS.LINK_IMPORT);
+    if (importLink) {
+        importLink.style.display = isAdmin ? '' : 'none';
+    }
+
+    const adminLink = document.getElementById(NAV_IDS.LINK_ADMIN);
+    if (adminLink) {
+        adminLink.style.display = isAdmin ? '' : 'none';
+    }
+}
+
+function setupLogout() {
+    const logoutBtn = document.getElementById(NAV_IDS.LINK_LOGOUT);
+    if (!logoutBtn) return;
+
+    logoutBtn.addEventListener('click', async () => {
+        const LS_TOKEN = 'anki_local_token';
+        const LS_IS_ADMIN = 'anki_local_is_admin';
+
+        try {
+            await logout();
+        } catch (e) {
+            // ログアウト失敗時もローカルはクリア
+        }
+
+        localStorage.removeItem(LS_TOKEN);
+        localStorage.removeItem(LS_IS_ADMIN);
+        setToken('');
+        replaceRoute('/login');
+    });
+}
+
+function showAuthError(el, message) {
+    if (!el) return;
+    el.textContent = message;
+    el.classList.remove('hidden');
+}
+
+function hideAuthError(el) {
+    if (!el) return;
+    el.classList.add('hidden');
+    el.textContent = '';
+}
 
 /**
  * トースト通知システム（window._showToast）をセットアップする
@@ -92,20 +263,17 @@ function setupToast() {
         const container = document.getElementById('toast-container');
         if (!container) return;
 
-        // トースト要素の生成
         const toast = document.createElement('div');
         toast.className = `toast toast-${type} animate-fade-in`;
         toast.textContent = message;
 
         container.appendChild(toast);
 
-        // 3秒後にフェードアウトさせて削除
         setTimeout(() => {
             toast.classList.add('animate-fade-out');
             toast.addEventListener('animationend', () => {
                 toast.remove();
             });
-            // アニメーションが発火しなかった場合のフォールバック削除
             setTimeout(() => {
                 if (toast.parentNode) {
                     toast.remove();
@@ -116,54 +284,9 @@ function setupToast() {
 }
 
 /**
- * トークンが見つからない場合のエラー画面表示
+ * ナビゲーションバーのクリックイベントハンドラを設定
  */
-function showTokenError() {
-    const appContainer = document.getElementById('app');
-    if (appContainer) {
-        appContainer.innerHTML = `
-            <div style="
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                min-height: 100vh;
-                background-color: #0f0f23;
-                color: #e8e8f0;
-                font-family: sans-serif;
-                text-align: center;
-                padding: 20px;
-            ">
-                <div style="
-                    background: rgba(26, 26, 46, 0.8);
-                    border: 1px solid rgba(239, 68, 68, 0.4);
-                    border-radius: 12px;
-                    padding: 30px;
-                    max-width: 500px;
-                    box-shadow: 0 8px 32px rgba(239, 68, 68, 0.1);
-                    backdrop-filter: blur(10px);
-                ">
-                    <h1 style="color: #ef4444; margin-top: 0;">⚠️ 認証エラー</h1>
-                    <p style="color: #8888a8; line-height: 1.6;">
-                        アクセスに必要な認証トークンが指定されていません。
-                    </p>
-                    <p style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; font-family: monospace; font-size: 0.9em; word-break: break-all;">
-                        URLの末尾に ?token=YOUR_TOKEN を追加して再試行してください。<br>
-                        (例: http://localhost:8000/?token=xxxx)
-                    </p>
-                    <p style="color: #8888a8; font-size: 0.85em; margin-bottom: 0;">
-                        サーバーの起動コンソールに出力されたトークン値を確認してください。
-                    </p>
-                </div>
-            </div>
-        `;
-    }
-}
-
-/**
- * ナビゲーションバー of クリックイベントハンドラを設定
- */
-function setupNavigation(token) {
+function setupNavigation() {
     const navDecks = document.getElementById(NAV_IDS.LINK_DECKS);
     const navStats = document.getElementById(NAV_IDS.LINK_STATS);
     const navImport = document.getElementById(NAV_IDS.LINK_IMPORT);
@@ -186,6 +309,14 @@ function setupNavigation(token) {
         navImport.addEventListener('click', (e) => {
             e.preventDefault();
             navigateTo('/import');
+        });
+    }
+
+    const navAdmin = document.getElementById(NAV_IDS.LINK_ADMIN);
+    if (navAdmin) {
+        navAdmin.addEventListener('click', (e) => {
+            e.preventDefault();
+            navigateTo('/admin');
         });
     }
 }

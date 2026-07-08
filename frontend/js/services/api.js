@@ -22,6 +22,14 @@ export function setToken(token) {
 }
 
 /**
+ * 現在のトークンを取得する。
+ * @returns {string}
+ */
+export function getToken() {
+  return _token;
+}
+
+/**
  * APIサービスを初期化する。
  * @param {object} context - 初期化コンテキスト
  */
@@ -33,10 +41,9 @@ export function init(context) {
 
 /**
  * URLのクエリパラメータからトークンを取得する。
- * ?token=xxx の形式で渡される認証トークンを抽出する。
  * @returns {string} トークン文字列（存在しない場合は空文字）
  */
-function getToken() {
+function getTokenFromUrl() {
   const params = new URLSearchParams(window.location.search);
   return params.get('token') || '';
 }
@@ -47,14 +54,13 @@ function getToken() {
  * @returns {string} トークン付きURL
  */
 function buildUrl(endpoint) {
-  const token = _token || getToken();
+  const token = _token || getTokenFromUrl();
   const separator = endpoint.includes('?') ? '&' : '?';
   return token ? `${endpoint}${separator}token=${encodeURIComponent(token)}` : endpoint;
 }
 
 /**
  * APIエラーレスポンスのハンドリング。
- * ステータスコードに応じたエラーメッセージを生成する。
  * @param {Response} response - fetchのレスポンスオブジェクト
  * @throws {Error} HTTPエラーの詳細を含むErrorオブジェクト
  */
@@ -67,13 +73,12 @@ async function handleErrorResponse(response) {
       const errorBody = JSON.parse(text);
       errorMessage = errorBody?.error || errorBody?.message || errorMessage;
     } catch {
-      // JSONパースできない場合はテキストをそのままかステータスコードのみ
       if (text) errorMessage = text.substring(0, 100);
     }
   } catch {
     // textの読み取り自体が失敗した場合
   }
-  
+
   console.error('[API Error]', errorMessage);
   throw new Error(errorMessage);
 }
@@ -100,7 +105,6 @@ async function fetchWithTimeout(url, options) {
 
 /**
  * レスポンスをJSONとして安全にパースする。
- * Content-TypeがJSONでない場合は詳細をログに出力してエラーを投げる。
  * @param {Response} response - fetchレスポンス
  * @param {string} endpoint - 元のエンドポイント（ログ用）
  * @returns {Promise<any>} パース済みJSONデータ
@@ -131,7 +135,7 @@ async function parseJsonResponse(response, endpoint) {
 export async function apiGet(endpoint) {
   const url = buildUrl(endpoint);
   console.log(`[API GET] Request: ${endpoint}`);
-  
+
   const response = await fetchWithTimeout(url, {
     method: 'GET',
     headers: { 'Accept': 'application/json' },
@@ -198,6 +202,20 @@ export async function apiPostFormData(endpoint, formData) {
   return response.json();
 }
 
+/* === 認証系ショートカット === */
+
+/** ログイン */
+export const login = (username, password) => apiPost(API.LOGIN, { username, password });
+
+/** 新規登録 */
+export const register = (username, password) => apiPost(API.REGISTER, { username, password });
+
+/** ログアウト */
+export const logout = () => apiPost(API.LOGOUT, {});
+
+/** 現在のユーザー情報取得 */
+export const fetchMe = () => apiGet(API.ME);
+
 /* === 便利なショートカット関数群 === */
 
 /** デッキ一覧を取得 */
@@ -230,3 +248,41 @@ export const updateDeckOptions = (deckId, options) => apiPost(API.OPTIONS(deckId
 
 /** デッキ内のタグ一覧を取得 */
 export const fetchDeckTags = (deckId) => apiGet(API.TAGS(deckId));
+
+/* === 管理者用ショートカット === */
+
+/** ユーザー一覧取得 */
+export const fetchAdminUsers = () => apiGet(API.ADMIN_USERS);
+
+/** ユーザー削除 */
+export const deleteAdminUser = (userId) => apiDelete(API.ADMIN_USER_DELETE(userId));
+
+/** ユーザーパスワード変更 */
+export const changeUserPassword = (userId, password) => apiPost(API.ADMIN_USER_PASSWORD(userId), { password });
+
+/** ユーザー学習状態リセット */
+export const resetUserLearning = (userId) => apiPost(API.ADMIN_USER_RESET(userId), {});
+
+/**
+ * DELETEリクエストを送信する。
+ * @param {string} endpoint - APIエンドポイント
+ * @returns {Promise<any>}
+ */
+async function apiDelete(endpoint) {
+  const url = buildUrl(endpoint);
+  console.log(`[API DELETE] Request: ${endpoint}`);
+
+  const response = await fetchWithTimeout(url, {
+    method: 'DELETE',
+    headers: { 'Accept': 'application/json' },
+  });
+
+  if (!response.ok) {
+    console.error(`[API DELETE] Error ${response.status}: ${endpoint}`);
+    await handleErrorResponse(response);
+  }
+
+  const data = await parseJsonResponse(response, endpoint);
+  console.log(`[API DELETE] Success: ${endpoint}`, data);
+  return data;
+}

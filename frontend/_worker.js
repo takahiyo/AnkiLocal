@@ -2373,10 +2373,34 @@ function calculateNextReview(state, rating) {
 
 // worker/index.ts
 var app = new Hono2().basePath("/api");
+async function sha256(text) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function generateToken() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  const bytes = new Uint8Array(48);
+  crypto.getRandomValues(bytes);
+  for (let i = 0; i < 48; i++) {
+    result += chars[bytes[i] % chars.length];
+  }
+  return result;
+}
 app.use("*", async (c, next) => {
-  const expectedToken = c.env.ACCESS_TOKEN || "ankilocal-secret";
+  const db = c.env.DB;
+  await runMigrations(db);
   const url = new URL(c.req.url);
-  if (url.pathname.startsWith("/api/")) {
+  const pathname = url.pathname;
+  const publicPaths = ["/api/auth/login", "/api/auth/register"];
+  if (publicPaths.includes(pathname)) {
+    c.set("user", null);
+    await next();
+    return;
+  }
+  if (pathname.startsWith("/api/")) {
     let token = c.req.query("token");
     if (!token) {
       const authHeader = c.req.header("Authorization");
@@ -2384,52 +2408,116 @@ app.use("*", async (c, next) => {
         token = authHeader.substring(7);
       }
     }
-    if (token !== expectedToken) {
-      return c.json({ error: "\u8A8D\u8A3C\u30A8\u30E9\u30FC: \u7121\u52B9\u306A\u30C8\u30FC\u30AF\u30F3\u3067\u3059" }, 401);
+    if (!token) {
+      return c.json({ error: "\u8A8D\u8A3C\u30A8\u30E9\u30FC: \u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044" }, 401);
     }
+    const user = await db.prepare("SELECT id, username, is_admin FROM users WHERE session_token = ?").bind(token).first();
+    if (!user) {
+      return c.json({ error: "\u8A8D\u8A3C\u30A8\u30E9\u30FC: \u7121\u52B9\u306A\u30BB\u30C3\u30B7\u30E7\u30F3\u3067\u3059\u3002\u518D\u30ED\u30B0\u30A4\u30F3\u3057\u3066\u304F\u3060\u3055\u3044" }, 401);
+    }
+    c.set("user", { id: user.id, username: user.username, is_admin: !!user.is_admin });
   }
+  await next();
+});
+var migrationDone = false;
+async function runMigrations(db) {
+  if (migrationDone) return;
   try {
-    await c.env.DB.prepare("ALTER TABLE card_states ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0").run();
-  } catch (e) {
-  }
-  try {
-    await c.env.DB.prepare("ALTER TABLE deck_options ADD COLUMN excluded_tags TEXT NOT NULL DEFAULT ''").run();
-  } catch (e) {
-  }
-  try {
-    await c.env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS deck_options (
-          deck_id          INTEGER PRIMARY KEY,
-          max_new_cards    INTEGER NOT NULL DEFAULT 20,
-          max_review_cards INTEGER NOT NULL DEFAULT 100,
-          review_order     TEXT NOT NULL DEFAULT 'random',
-          excluded_tags    TEXT NOT NULL DEFAULT '',
-          FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS users (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        username        TEXT NOT NULL UNIQUE,
+        password_hash   TEXT NOT NULL,
+        session_token   TEXT,
+        is_admin        INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `).run();
   } catch (e) {
   }
-  await next();
-});
-app.notFound(async (c) => {
-  const response = await c.env.ASSETS.fetch(c.req.raw);
-  const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("text/html")) {
-    const token = c.env.ACCESS_TOKEN || "ankilocal-secret";
-    const html = await response.text();
-    const injected = html.replace(
-      "</head>",
-      `<script>window.__ANKI_TOKEN__ = "${token}";</script></head>`
-    );
-    return new Response(injected, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers
-    });
+  try {
+    const info = await db.prepare("PRAGMA table_info(card_states)").all();
+    const hasUserId = info.results.some((r) => r.name === "user_id");
+    if (!hasUserId) {
+      const hasOldLapses = info.results.some((r) => r.name === "lapses");
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS card_states_new (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          card_id         INTEGER NOT NULL,
+          user_id         INTEGER NOT NULL,
+          ease_factor     REAL NOT NULL DEFAULT 2.5,
+          interval_days   REAL NOT NULL DEFAULT 0,
+          repetitions     INTEGER NOT NULL DEFAULT 0,
+          lapses          INTEGER NOT NULL DEFAULT 0,
+          next_review_at  TEXT,
+          last_reviewed_at TEXT,
+          status          TEXT NOT NULL DEFAULT 'new',
+          FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(card_id, user_id)
+        )
+      `).run();
+      const lapsesCol = hasOldLapses ? "COALESCE(lapses, 0)" : "0";
+      await db.prepare(`
+        INSERT OR IGNORE INTO card_states_new (card_id, user_id, ease_factor, interval_days, repetitions, lapses, next_review_at, last_reviewed_at, status)
+        SELECT card_id, 1, ease_factor, interval_days, repetitions, ${lapsesCol}, next_review_at, last_reviewed_at, status
+        FROM card_states
+      `).run();
+      await db.prepare("DROP TABLE card_states").run();
+      await db.prepare("ALTER TABLE card_states_new RENAME TO card_states").run();
+    }
+  } catch (e) {
   }
-  return response;
-});
-async function getDeckCounts(db, deckId) {
+  try {
+    await db.prepare("ALTER TABLE review_logs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1").run();
+  } catch (e) {
+  }
+  try {
+    const info = await db.prepare("PRAGMA table_info(deck_options)").all();
+    const hasUserId = info.results.some((r) => r.name === "user_id");
+    if (!hasUserId) {
+      const hasExcludedTags = info.results.some((r) => r.name === "excluded_tags");
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS deck_options_new (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          deck_id          INTEGER NOT NULL,
+          user_id          INTEGER NOT NULL,
+          max_new_cards    INTEGER NOT NULL DEFAULT 20,
+          max_review_cards INTEGER NOT NULL DEFAULT 100,
+          review_order     TEXT NOT NULL DEFAULT 'random',
+          excluded_tags    TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(deck_id, user_id)
+        )
+      `).run();
+      const excludedTagsCol = hasExcludedTags ? "excluded_tags" : "''";
+      await db.prepare(`
+        INSERT OR IGNORE INTO deck_options_new (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
+        SELECT deck_id, 1, max_new_cards, max_review_cards, review_order, ${excludedTagsCol}
+        FROM deck_options
+      `).run();
+      await db.prepare("DROP TABLE deck_options").run();
+      await db.prepare("ALTER TABLE deck_options_new RENAME TO deck_options").run();
+    }
+  } catch (e) {
+  }
+  try {
+    const adminHash = await sha256("SukilHaakuAdmin116");
+    await db.prepare(`
+      INSERT OR IGNORE INTO users (id, username, password_hash, is_admin)
+      VALUES (1, '2379862', ?, 1)
+    `).bind(adminHash).run();
+  } catch (e) {
+  }
+  migrationDone = true;
+}
+function getUserId(c) {
+  const user = c.get("user");
+  if (!user) throw new Error("\u8A8D\u8A3C\u304C\u5FC5\u8981\u3067\u3059");
+  return user.id;
+}
+async function getDeckCounts(db, deckId, userId) {
   const query = `
     SELECT
       COUNT(*) as total,
@@ -2437,10 +2525,10 @@ async function getDeckCounts(db, deckId) {
       SUM(CASE WHEN cs.status = 'learning' THEN 1 ELSE 0 END) as learning_count,
       SUM(CASE WHEN cs.status = 'review' THEN 1 ELSE 0 END) as review_count
     FROM cards c
-    LEFT JOIN card_states cs ON c.id = cs.card_id
+    LEFT JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
     WHERE c.deck_id = ?
   `;
-  const result = await db.prepare(query).bind(deckId).first();
+  const result = await db.prepare(query).bind(userId, deckId).first();
   return {
     total: result?.total || 0,
     new_count: result?.new_count || 0,
@@ -2448,10 +2536,10 @@ async function getDeckCounts(db, deckId) {
     review_count: result?.review_count || 0
   };
 }
-async function getStudyableCount(db, deckId, excludedTags) {
+async function getStudyableCount(db, deckId, excludedTags, userId) {
   const excludedList = excludedTags ? excludedTags.trim().split(/\s+/).filter(Boolean) : [];
   if (excludedList.length === 0) {
-    const counts = await getDeckCounts(db, deckId);
+    const counts = await getDeckCounts(db, deckId, userId);
     return counts.total;
   }
   const { results: allRows } = await db.prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''").bind(deckId).all();
@@ -2465,28 +2553,199 @@ async function getStudyableCount(db, deckId, excludedTags) {
   if (includedTags.length === 0) return 0;
   const conditions = includedTags.map(() => `INSTR(' ' || c.tags || ' ', ?) > 0`);
   const params = includedTags.map((t) => ` ${t} `);
-  const result = await db.prepare(`
-    SELECT COUNT(*) as total FROM cards c
-    WHERE c.deck_id = ? AND (${conditions.join(" OR ")})
-  `).bind(deckId, ...params).first();
+  const result = await db.prepare(`SELECT COUNT(*) as total FROM cards c WHERE c.deck_id = ? AND (${conditions.join(" OR ")})`).bind(deckId, ...params).first();
   return result?.total || 0;
 }
+app.post("/auth/login", async (c) => {
+  const db = c.env.DB;
+  try {
+    const { username, password } = await c.req.json();
+    if (!username || username.trim() === "") {
+      return c.json({ error: "ID\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044" }, 400);
+    }
+    const user = await db.prepare("SELECT id, username, password_hash, is_admin FROM users WHERE username = ?").bind(username.trim()).first();
+    if (!user) {
+      if (!password || password.trim() === "") {
+        return c.json({ status: "new_account", username: username.trim() }, 200);
+      }
+      return c.json({ error: "\u30A2\u30AB\u30A6\u30F3\u30C8\u304C\u5B58\u5728\u3057\u307E\u305B\u3093" }, 404);
+    }
+    const inputHash = await sha256(password);
+    if (inputHash !== user.password_hash) {
+      return c.json({ error: "\u30D1\u30B9\u30EF\u30FC\u30C9\u304C\u6B63\u3057\u304F\u3042\u308A\u307E\u305B\u3093" }, 401);
+    }
+    const token = generateToken();
+    await db.prepare("UPDATE users SET session_token = ? WHERE id = ?").bind(token, user.id).run();
+    return c.json({
+      success: true,
+      token,
+      is_admin: !!user.is_admin,
+      username: user.username
+    });
+  } catch (err) {
+    return c.json({ error: `\u30ED\u30B0\u30A4\u30F3\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
+});
+app.post("/auth/register", async (c) => {
+  const db = c.env.DB;
+  try {
+    const { username, password } = await c.req.json();
+    if (!username || username.trim() === "") {
+      return c.json({ error: "ID\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044" }, 400);
+    }
+    if (!password || password.trim() === "") {
+      return c.json({ error: "\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044" }, 400);
+    }
+    const uname = username.trim();
+    const existing = await db.prepare("SELECT id FROM users WHERE username = ?").bind(uname).first();
+    if (existing) {
+      return c.json({ error: "\u3053\u306EID\u306F\u65E2\u306B\u4F7F\u7528\u3055\u308C\u3066\u3044\u307E\u3059" }, 409);
+    }
+    const passwordHash = await sha256(password);
+    const token = generateToken();
+    await db.prepare("INSERT INTO users (username, password_hash, session_token, is_admin) VALUES (?, ?, ?, 0)").bind(uname, passwordHash, token).run();
+    return c.json({
+      success: true,
+      token,
+      is_admin: false,
+      username: uname
+    });
+  } catch (err) {
+    return c.json({ error: `\u30A2\u30AB\u30A6\u30F3\u30C8\u4F5C\u6210\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
+});
+app.post("/auth/logout", async (c) => {
+  const db = c.env.DB;
+  try {
+    const userId = getUserId(c);
+    await db.prepare("UPDATE users SET session_token = NULL WHERE id = ?").bind(userId).run();
+    return c.json({ success: true });
+  } catch (err) {
+    return c.json({ error: `\u30ED\u30B0\u30A2\u30A6\u30C8\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
+});
+app.get("/auth/me", async (c) => {
+  const user = c.get("user");
+  if (!user) {
+    return c.json({ error: "\u8A8D\u8A3C\u3055\u308C\u3066\u3044\u307E\u305B\u3093" }, 401);
+  }
+  return c.json({
+    id: user.id,
+    username: user.username,
+    is_admin: user.is_admin
+  });
+});
+function requireAdmin(c) {
+  const user = c.get("user");
+  if (!user || !user.is_admin) {
+    throw new Error("\u7BA1\u7406\u8005\u6A29\u9650\u304C\u5FC5\u8981\u3067\u3059");
+  }
+  return user;
+}
+app.get("/admin/users", async (c) => {
+  const db = c.env.DB;
+  try {
+    requireAdmin(c);
+    const { results: users } = await db.prepare("SELECT id, username, is_admin, created_at, session_token IS NOT NULL as logged_in FROM users ORDER BY id").all();
+    return c.json(
+      users.map((u) => ({
+        id: u.id,
+        username: u.username,
+        is_admin: !!u.is_admin,
+        created_at: u.created_at,
+        logged_in: !!u.logged_in
+      }))
+    );
+  } catch (err) {
+    if (err.message === "\u7BA1\u7406\u8005\u6A29\u9650\u304C\u5FC5\u8981\u3067\u3059") {
+      return c.json({ error: err.message }, 403);
+    }
+    return c.json({ error: `\u30E6\u30FC\u30B6\u30FC\u4E00\u89A7\u53D6\u5F97\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
+});
+app.delete("/admin/users/:userId", async (c) => {
+  const db = c.env.DB;
+  try {
+    const admin = requireAdmin(c);
+    const userId = parseInt(c.req.param("userId"), 10);
+    if (isNaN(userId)) return c.json({ error: "\u7121\u52B9\u306A\u30E6\u30FC\u30B6\u30FCID\u3067\u3059" }, 400);
+    const target = await db.prepare("SELECT id, username, is_admin FROM users WHERE id = ?").bind(userId).first();
+    if (!target) return c.json({ error: "\u30E6\u30FC\u30B6\u30FC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093" }, 404);
+    if (target.is_admin) return c.json({ error: "\u7BA1\u7406\u8005\u30A2\u30AB\u30A6\u30F3\u30C8\u306F\u524A\u9664\u3067\u304D\u307E\u305B\u3093" }, 400);
+    if (target.id === admin.id) return c.json({ error: "\u81EA\u5206\u81EA\u8EAB\u306F\u524A\u9664\u3067\u304D\u307E\u305B\u3093" }, 400);
+    await db.batch([
+      db.prepare("DELETE FROM card_states WHERE user_id = ?").bind(userId),
+      db.prepare("DELETE FROM review_logs WHERE user_id = ?").bind(userId),
+      db.prepare("DELETE FROM deck_options WHERE user_id = ?").bind(userId),
+      db.prepare("DELETE FROM users WHERE id = ?").bind(userId)
+    ]);
+    return c.json({ success: true, message: `\u30A2\u30AB\u30A6\u30F3\u30C8\u300C${target.username}\u300D\u3092\u524A\u9664\u3057\u307E\u3057\u305F` });
+  } catch (err) {
+    if (err.message === "\u7BA1\u7406\u8005\u6A29\u9650\u304C\u5FC5\u8981\u3067\u3059") {
+      return c.json({ error: err.message }, 403);
+    }
+    return c.json({ error: `\u30A2\u30AB\u30A6\u30F3\u30C8\u524A\u9664\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
+});
+app.post("/admin/users/:userId/password", async (c) => {
+  const db = c.env.DB;
+  try {
+    requireAdmin(c);
+    const userId = parseInt(c.req.param("userId"), 10);
+    if (isNaN(userId)) return c.json({ error: "\u7121\u52B9\u306A\u30E6\u30FC\u30B6\u30FCID\u3067\u3059" }, 400);
+    const { password } = await c.req.json();
+    if (!password || password.trim() === "") {
+      return c.json({ error: "\u65B0\u3057\u3044\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044" }, 400);
+    }
+    const target = await db.prepare("SELECT id, username FROM users WHERE id = ?").bind(userId).first();
+    if (!target) return c.json({ error: "\u30E6\u30FC\u30B6\u30FC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093" }, 404);
+    const passwordHash = await sha256(password);
+    await db.prepare("UPDATE users SET password_hash = ?, session_token = NULL WHERE id = ?").bind(passwordHash, userId).run();
+    return c.json({ success: true, message: `\u30A2\u30AB\u30A6\u30F3\u30C8\u300C${target.username}\u300D\u306E\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u5909\u66F4\u3057\u307E\u3057\u305F` });
+  } catch (err) {
+    if (err.message === "\u7BA1\u7406\u8005\u6A29\u9650\u304C\u5FC5\u8981\u3067\u3059") {
+      return c.json({ error: err.message }, 403);
+    }
+    return c.json({ error: `\u30D1\u30B9\u30EF\u30FC\u30C9\u5909\u66F4\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
+});
+app.post("/admin/users/:userId/reset", async (c) => {
+  const db = c.env.DB;
+  try {
+    requireAdmin(c);
+    const userId = parseInt(c.req.param("userId"), 10);
+    if (isNaN(userId)) return c.json({ error: "\u7121\u52B9\u306A\u30E6\u30FC\u30B6\u30FCID\u3067\u3059" }, 400);
+    const target = await db.prepare("SELECT id, username FROM users WHERE id = ?").bind(userId).first();
+    if (!target) return c.json({ error: "\u30E6\u30FC\u30B6\u30FC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093" }, 404);
+    await db.batch([
+      db.prepare("DELETE FROM review_logs WHERE user_id = ?").bind(userId),
+      db.prepare("DELETE FROM card_states WHERE user_id = ?").bind(userId)
+    ]);
+    return c.json({ success: true, message: `\u30A2\u30AB\u30A6\u30F3\u30C8\u300C${target.username}\u300D\u306E\u5B66\u7FD2\u72B6\u614B\u3092\u30EA\u30BB\u30C3\u30C8\u3057\u307E\u3057\u305F` });
+  } catch (err) {
+    if (err.message === "\u7BA1\u7406\u8005\u6A29\u9650\u304C\u5FC5\u8981\u3067\u3059") {
+      return c.json({ error: err.message }, 403);
+    }
+    return c.json({ error: `\u5B66\u7FD2\u72B6\u614B\u30EA\u30BB\u30C3\u30C8\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
+});
 app.get("/decks", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   try {
     const { results: decks } = await db.prepare("SELECT id, name, created_at FROM decks ORDER BY name").all();
     const result = [];
     for (const deck of decks) {
-      const counts = await getDeckCounts(db, deck.id);
-      const options = await db.prepare("SELECT max_new_cards, max_review_cards, excluded_tags FROM deck_options WHERE deck_id = ?").bind(deck.id).first();
+      const counts = await getDeckCounts(db, deck.id, userId);
+      const options = await db.prepare("SELECT max_new_cards, max_review_cards, excluded_tags FROM deck_options WHERE deck_id = ? AND user_id = ?").bind(deck.id, userId).first();
       const dailyTaskLimit = (options?.max_new_cards || 20) + (options?.max_review_cards || 100);
-      const studyableCount = await getStudyableCount(db, deck.id, options?.excluded_tags || "");
+      const studyableCount = await getStudyableCount(db, deck.id, options?.excluded_tags || "", userId);
       const todayStart = /* @__PURE__ */ new Date();
       todayStart.setUTCHours(0, 0, 0, 0);
       const todayResult = await db.prepare(
         `SELECT COUNT(*) as today FROM review_logs
-           WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?)`
-      ).bind(todayStart.toISOString(), deck.id).first();
+           WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?) AND user_id = ?`
+      ).bind(todayStart.toISOString(), deck.id, userId).first();
       const reviewsToday = todayResult?.today || 0;
       const dailyRemaining = Math.max(0, dailyTaskLimit - reviewsToday);
       result.push({
@@ -2573,14 +2832,10 @@ app.post("/import", async (c) => {
         );
       }
       insertStmts.push(
-        db.prepare(
-          `INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`
-        ).bind(...params)
+        db.prepare(`INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`).bind(...params)
       );
     }
-    insertStmts.push(
-      db.prepare("INSERT OR IGNORE INTO card_states (card_id) SELECT id FROM cards")
-    );
+    insertStmts.push(db.prepare("INSERT OR IGNORE INTO card_states (card_id, user_id) SELECT id, 1 FROM cards"));
     const batchResults = await db.batch(insertStmts);
     for (let r = 0; r < batchResults.length - 1; r++) {
       if (batchResults[r].meta && batchResults[r].meta.changes) {
@@ -2588,12 +2843,12 @@ app.post("/import", async (c) => {
       }
     }
     const skipped = parsedCards.length - cardsCreated;
-    const { results: deckCountRows } = await db.prepare(`
-      SELECT c.deck_id, COUNT(*) as total
-      FROM cards c
-      WHERE c.deck_id IN (${uniqueDeckNames.map(() => "?").join(",")})
-      GROUP BY c.deck_id
-    `).bind(...uniqueDeckNames.map((n) => deckCache[n])).all();
+    const { results: deckCountRows } = await db.prepare(
+      `SELECT c.deck_id, COUNT(*) as total
+         FROM cards c
+         WHERE c.deck_id IN (${uniqueDeckNames.map(() => "?").join(",")})
+         GROUP BY c.deck_id`
+    ).bind(...uniqueDeckNames.map((n) => deckCache[n])).all();
     const deckCountMap = {};
     for (const row of deckCountRows) {
       deckCountMap[row.deck_id] = row.total;
@@ -2620,10 +2875,13 @@ app.post("/import", async (c) => {
 });
 app.get("/decks/:deckId/options", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   const deckIdStr = c.req.param("deckId");
   const deckId = parseInt(deckIdStr, 10);
   if (isNaN(deckId)) return c.json({ error: "\u7121\u52B9\u306A\u30C7\u30C3\u30ADID\u3067\u3059" }, 400);
-  let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ?").bind(deckId).first();
+  let options = await db.prepare(
+    "SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ? AND user_id = ?"
+  ).bind(deckId, userId).first();
   if (!options) {
     options = {
       max_new_cards: 20,
@@ -2636,6 +2894,7 @@ app.get("/decks/:deckId/options", async (c) => {
 });
 app.post("/decks/:deckId/options", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   const deckIdStr = c.req.param("deckId");
   const deckId = parseInt(deckIdStr, 10);
   if (isNaN(deckId)) return c.json({ error: "\u7121\u52B9\u306A\u30C7\u30C3\u30ADID\u3067\u3059" }, 400);
@@ -2644,15 +2903,15 @@ app.post("/decks/:deckId/options", async (c) => {
   const maxRev = typeof body.max_review_cards === "number" ? body.max_review_cards : 100;
   const order = body.review_order === "sequential" ? "sequential" : "random";
   const excludedTags = typeof body.excluded_tags === "string" ? body.excluded_tags : "";
-  await db.prepare(`
-    INSERT INTO deck_options (deck_id, max_new_cards, max_review_cards, review_order, excluded_tags)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(deck_id) DO UPDATE SET
-      max_new_cards = excluded.max_new_cards,
-      max_review_cards = excluded.max_review_cards,
-      review_order = excluded.review_order,
-      excluded_tags = excluded.excluded_tags
-  `).bind(deckId, maxNew, maxRev, order, excludedTags).run();
+  await db.prepare(
+    `INSERT INTO deck_options (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(deck_id, user_id) DO UPDATE SET
+         max_new_cards = excluded.max_new_cards,
+         max_review_cards = excluded.max_review_cards,
+         review_order = excluded.review_order,
+         excluded_tags = excluded.excluded_tags`
+  ).bind(deckId, userId, maxNew, maxRev, order, excludedTags).run();
   return c.json({ success: true });
 });
 app.get("/decks/:deckId/tags", async (c) => {
@@ -2676,6 +2935,7 @@ app.get("/decks/:deckId/tags", async (c) => {
 });
 app.get("/decks/:deckId/study", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   const deckId = parseInt(c.req.param("deckId"), 10);
   try {
     const deckExists = await db.prepare("SELECT id FROM decks WHERE id = ?").bind(deckId).first();
@@ -2683,9 +2943,10 @@ app.get("/decks/:deckId/study", async (c) => {
       return c.json({ error: "\u30C7\u30C3\u30AD\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093" }, 404);
     }
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-    const batchSize = 20;
     const cards = [];
-    let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ?").bind(deckId).first();
+    let options = await db.prepare(
+      "SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ? AND user_id = ?"
+    ).bind(deckId, userId).first();
     if (!options) {
       options = { max_new_cards: 20, max_review_cards: 100, review_order: "random", excluded_tags: "" };
     }
@@ -2709,16 +2970,21 @@ app.get("/decks/:deckId/study", async (c) => {
         tagFilterSql = " AND 1=0";
       }
     }
+    await db.prepare(
+      `INSERT OR IGNORE INTO card_states (card_id, user_id)
+         SELECT c.id, ? FROM cards c LEFT JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
+         WHERE c.deck_id = ? AND cs.id IS NULL`
+    ).bind(userId, userId, deckId).run();
     const newBatchSize = options.max_new_cards;
     if (newBatchSize > 0) {
       const { results: newCards } = await db.prepare(
         `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
-           JOIN card_states cs ON c.id = cs.card_id
+           JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
            WHERE c.deck_id = ? AND cs.status = 'new'${tagFilterSql}
            ORDER BY c.id
            LIMIT ?`
-      ).bind(deckId, ...tagFilterParams, newBatchSize).all();
+      ).bind(userId, deckId, ...tagFilterParams, newBatchSize).all();
       cards.push(...newCards);
     }
     const reviewBatchSize = options.max_review_cards;
@@ -2726,12 +2992,12 @@ app.get("/decks/:deckId/study", async (c) => {
       const { results: reviewCards } = await db.prepare(
         `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
-           JOIN card_states cs ON c.id = cs.card_id
+           JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
            WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
              AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)${tagFilterSql}
            ORDER BY cs.next_review_at
            LIMIT ?`
-      ).bind(deckId, nowIso, ...tagFilterParams, reviewBatchSize).all();
+      ).bind(userId, deckId, nowIso, ...tagFilterParams, reviewBatchSize).all();
       cards.push(...reviewCards);
     }
     if (options.review_order === "random") {
@@ -2766,13 +3032,17 @@ app.get("/decks/:deckId/study", async (c) => {
 });
 app.post("/cards/:cardId/review", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   const cardId = parseInt(c.req.param("cardId"), 10);
   try {
     const { rating } = await c.req.json();
     if (!rating || rating < 1 || rating > 4) {
       return c.json({ error: "\u4E0D\u6B63\u306A\u8A55\u4FA1\u5024\u3067\u3059 (1-4)" }, 400);
     }
-    const stateRow = await db.prepare("SELECT ease_factor, interval_days, repetitions, lapses, status FROM card_states WHERE card_id = ?").bind(cardId).first();
+    await db.prepare("INSERT OR IGNORE INTO card_states (card_id, user_id) VALUES (?, ?)").bind(cardId, userId).run();
+    const stateRow = await db.prepare(
+      "SELECT ease_factor, interval_days, repetitions, lapses, status FROM card_states WHERE card_id = ? AND user_id = ?"
+    ).bind(cardId, userId).first();
     if (!stateRow) {
       return c.json({ error: "\u30AB\u30FC\u30C9\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093" }, 404);
     }
@@ -2791,9 +3061,9 @@ app.post("/cards/:cardId/review", async (c) => {
     await db.batch([
       db.prepare(
         `UPDATE card_states
-         SET ease_factor = ?, interval_days = ?, repetitions = ?, lapses = ?,
-             next_review_at = ?, last_reviewed_at = ?, status = ?
-         WHERE card_id = ?`
+           SET ease_factor = ?, interval_days = ?, repetitions = ?, lapses = ?,
+               next_review_at = ?, last_reviewed_at = ?, status = ?
+           WHERE card_id = ? AND user_id = ?`
       ).bind(
         result.easeFactor,
         result.intervalDays,
@@ -2802,9 +3072,10 @@ app.post("/cards/:cardId/review", async (c) => {
         nextReviewIso,
         nowIso,
         result.status,
-        cardId
+        cardId,
+        userId
       ),
-      db.prepare("INSERT INTO review_logs (card_id, rating, reviewed_at) VALUES (?, ?, ?)").bind(cardId, rating, nowIso)
+      db.prepare("INSERT INTO review_logs (card_id, user_id, rating, reviewed_at) VALUES (?, ?, ?, ?)").bind(cardId, userId, rating, nowIso)
     ]);
     return c.json({
       card_id: cardId,
@@ -2820,12 +3091,12 @@ app.post("/cards/:cardId/review", async (c) => {
     return c.json({ error: `\u5FA9\u7FD2\u767B\u9332\u30A8\u30E9\u30FC: ${err.message}` }, 500);
   }
 });
-async function aggregateStats(db, deckId) {
-  let cardWhere = "";
-  let cardParams = [];
+async function aggregateStats(db, userId, deckId) {
+  let cardWhere = "WHERE cs.user_id = ?";
+  let cardParams = [userId];
   if (deckId !== void 0) {
-    cardWhere = "WHERE c.deck_id = ?";
-    cardParams = [deckId];
+    cardWhere = "WHERE c.deck_id = ? AND cs.user_id = ?";
+    cardParams = [deckId, userId];
   }
   const countsQuery = `
     SELECT
@@ -2834,30 +3105,30 @@ async function aggregateStats(db, deckId) {
       SUM(CASE WHEN cs.status = 'learning' THEN 1 ELSE 0 END) as learning_count,
       SUM(CASE WHEN cs.status = 'review' THEN 1 ELSE 0 END) as review_count
     FROM cards c
-    LEFT JOIN card_states cs ON c.id = cs.card_id
-    ${cardWhere}
+    LEFT JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
+    ${deckId !== void 0 ? "WHERE c.deck_id = ?" : ""}
   `;
-  const counts = await db.prepare(countsQuery).bind(...cardParams).first();
+  const counts = await db.prepare(countsQuery).bind(userId, ...deckId !== void 0 ? [deckId] : []).first();
   const total = counts?.total || 0;
   const newCount = counts?.new_count || 0;
   const learningCount = counts?.learning_count || 0;
   const reviewCount = counts?.review_count || 0;
   const masteredCount = Math.max(0, total - (newCount + learningCount + reviewCount));
-  let reviewWhere = "";
-  let reviewParams = [];
+  let reviewWhere = "WHERE user_id = ?";
+  let reviewParams = [userId];
   if (deckId !== void 0) {
-    reviewWhere = "WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ?)";
-    reviewParams = [deckId];
+    reviewWhere = "WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ?) AND user_id = ?";
+    reviewParams = [deckId, userId];
   }
   const totalReviewsResult = await db.prepare(`SELECT COUNT(*) as total FROM review_logs ${reviewWhere}`).bind(...reviewParams).first();
   const todayStart = /* @__PURE__ */ new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
   const todayStartIso = todayStart.toISOString();
-  let todayWhere = "WHERE reviewed_at >= ?";
-  let todayParams = [todayStartIso];
+  let todayWhere = "WHERE reviewed_at >= ? AND user_id = ?";
+  let todayParams = [todayStartIso, userId];
   if (deckId !== void 0) {
-    todayWhere = "WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?)";
-    todayParams = [todayStartIso, deckId];
+    todayWhere = "WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?) AND user_id = ?";
+    todayParams = [todayStartIso, deckId, userId];
   }
   const todayReviewsResult = await db.prepare(`SELECT COUNT(*) as today FROM review_logs ${todayWhere}`).bind(...todayParams).first();
   return {
@@ -2868,7 +3139,6 @@ async function aggregateStats(db, deckId) {
     mastered_count: masteredCount,
     total_reviews: totalReviewsResult?.total || 0,
     reviews_today: todayReviewsResult?.today || 0,
-    // バックエンド/models.pyのフィールド名互換
     new_cards: newCount,
     learning_cards: learningCount,
     review_cards: reviewCount
@@ -2876,12 +3146,13 @@ async function aggregateStats(db, deckId) {
 }
 app.get("/stats", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   try {
-    const mainStats = await aggregateStats(db);
+    const mainStats = await aggregateStats(db, userId);
     const { results: decks } = await db.prepare("SELECT id, name FROM decks ORDER BY name").all();
     const deckStatsList = [];
     for (const deck of decks) {
-      const counts = await getDeckCounts(db, deck.id);
+      const counts = await getDeckCounts(db, deck.id, userId);
       const studyReady = counts.new_count + counts.learning_count + counts.review_count;
       const mastered = Math.max(0, counts.total - studyReady);
       deckStatsList.push({
@@ -2904,13 +3175,14 @@ app.get("/stats", async (c) => {
 });
 app.get("/stats/deck/:deckId", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   const deckId = parseInt(c.req.param("deckId"), 10);
   try {
     const deckRow = await db.prepare("SELECT name FROM decks WHERE id = ?").bind(deckId).first();
     if (!deckRow) {
       return c.json({ error: "\u30C7\u30C3\u30AD\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093" }, 404);
     }
-    const deckStats = await aggregateStats(db, deckId);
+    const deckStats = await aggregateStats(db, userId, deckId);
     return c.json({
       ...deckStats,
       deck_id: deckId,
@@ -2919,6 +3191,23 @@ app.get("/stats/deck/:deckId", async (c) => {
   } catch (err) {
     return c.json({ error: `\u30C7\u30C3\u30AD\u5225\u7D71\u8A08\u53D6\u5F97\u30A8\u30E9\u30FC: ${err.message}` }, 500);
   }
+});
+app.notFound(async (c) => {
+  const response = await c.env.ASSETS.fetch(c.req.raw);
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("text/html")) {
+    const html = await response.text();
+    const injected = html.replace(
+      "</head>",
+      `<script>window.__ANKI_TOKEN__ = "";</script></head>`
+    );
+    return new Response(injected, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+  }
+  return response;
 });
 var index_default = app;
 export {

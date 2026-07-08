@@ -11,10 +11,13 @@
 
 /** ページセクションのID */
 export const PAGE_IDS = Object.freeze({
+  LOGIN: 'page-login',
+  REGISTER: 'page-register',
   DECK_LIST: 'page-deck-list',
   STUDY: 'page-study',
   STATS: 'page-stats',
   IMPORT: 'page-import',
+  ADMIN: 'page-admin',
 });
 
 /** ナビゲーションのID */
@@ -22,6 +25,23 @@ export const NAV_IDS = Object.freeze({
   LINK_DECKS: 'nav-decks',
   LINK_STATS: 'nav-stats',
   LINK_IMPORT: 'nav-import',
+  LINK_ADMIN: 'nav-admin',
+  LINK_LOGOUT: 'nav-logout',
+});
+
+/** 認証画面 */
+export const AUTH_IDS = Object.freeze({
+  LOGIN_USERNAME: 'login-username',
+  LOGIN_PASSWORD: 'login-password',
+  LOGIN_SUBMIT: 'login-submit-btn',
+  LOGIN_ERROR: 'login-error',
+
+  REGISTER_USERNAME_DISPLAY: 'register-username-display',
+  REGISTER_PASSWORD: 'register-password',
+  REGISTER_PASSWORD_CONFIRM: 'register-password-confirm',
+  REGISTER_SUBMIT: 'register-submit-btn',
+  REGISTER_ERROR: 'register-error',
+  REGISTER_BACK: 'register-back-btn',
 });
 
 /** デッキ一覧画面 */

@@ -13,6 +13,7 @@ export { API } from './api.js';
 export {
   PAGE_IDS,
   NAV_IDS,
+  AUTH_IDS,
   DECK_LIST_IDS,
   STUDY_IDS,
   STATS_IDS,

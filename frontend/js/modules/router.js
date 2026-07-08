@@ -13,10 +13,13 @@ import { PAGE_IDS, NAV_IDS } from '../constants/index.js';
 
 /** ルート定義: ハッシュパターン → ページID のマッピング */
 const ROUTES = Object.freeze({
+  '/login': PAGE_IDS.LOGIN,
+  '/register': PAGE_IDS.REGISTER,
   '/decks': PAGE_IDS.DECK_LIST,
-  '/study': PAGE_IDS.STUDY,    // /study/:deckId のパラメータは動的に解析
+  '/study': PAGE_IDS.STUDY,
   '/stats': PAGE_IDS.STATS,
   '/import': PAGE_IDS.IMPORT,
+  '/admin': PAGE_IDS.ADMIN,
 });
 
 /** ナビリンクとルートの対応 */
@@ -24,12 +27,13 @@ const NAV_ROUTE_MAP = Object.freeze({
   [NAV_IDS.LINK_DECKS]: '/decks',
   [NAV_IDS.LINK_STATS]: '/stats',
   [NAV_IDS.LINK_IMPORT]: '/import',
+  [NAV_IDS.LINK_ADMIN]: '/admin',
 });
 
 /** ルート変更時のコールバック関数群 */
 let _onRouteChangeCallbacks = [];
 
-/** 履歴のスタック追跡用（アプリ内からhistory.back()が安全か判定するため） */
+/** 履歴のスタック追跡用 */
 let _historyCount = 0;
 
 /**
@@ -37,10 +41,10 @@ let _historyCount = 0;
  * @returns {{ route: string, params: object }} ルートパスとパラメータ
  */
 export function parseCurrentRoute() {
-  const hash = window.location.hash.slice(1) || '/decks'; // '#' を除去
-  const parts = hash.split('/').filter(Boolean); // 空文字を除去
+  const hash = window.location.hash.slice(1) || '/login';
+  const parts = hash.split('/').filter(Boolean);
 
-  // /study/:deckId のようなパラメータ付きルートの解析
+  // /study/:deckId
   if (parts[0] === 'study' && parts[1]) {
     return {
       route: '/study',
@@ -48,22 +52,30 @@ export function parseCurrentRoute() {
     };
   }
 
-  return {
-    route: `/${parts[0] || 'decks'}`,
-    params: {},
-  };
+  // /register/:username
+  if (parts[0] === 'register' && parts[1]) {
+    return {
+      route: '/register',
+      params: { username: parts[1] },
+    };
+  }
+
+  const route = `/${parts[0] || 'login'}`;
+  if (ROUTES[route]) {
+    return { route, params: {} };
+  }
+
+  return { route: '/login', params: {} };
 }
 
 /**
  * 指定ルートに対応するページセクションを表示し、他を非表示にする。
- * ナビリンクのアクティブ状態も更新する。
- * @param {string} route - ルートパス（例: '/decks'）
+ * @param {string} route - ルートパス
  */
 function activatePage(route) {
   const targetPageId = ROUTES[route];
   if (!targetPageId) {
-    // 不明なルートの場合はデッキ一覧にフォールバック
-    replaceRoute('/decks');
+    replaceRoute('/login');
     return;
   }
 
@@ -98,7 +110,7 @@ export function onRouteChange(callback) {
 }
 
 /**
- * 指定ルートに遷移する。履歴スタックが積まれる（進む）。
+ * 指定ルートに遷移する。履歴スタックが積まれる。
  * @param {string} path - ルートパス（例: '/study/123'）
  */
 export function navigateTo(path) {
@@ -117,8 +129,8 @@ export function replaceRoute(path) {
 }
 
 /**
- * 前のページに戻る。履歴があればhistory.back()し、無ければフォールバックへ。
- * @param {string} fallbackPath - フォールバック先ルート（例: '/decks'）
+ * 前のページに戻る。
+ * @param {string} fallbackPath - フォールバック先ルート
  */
 export function goBack(fallbackPath = '/decks') {
   if (_historyCount > 0) {
@@ -130,13 +142,11 @@ export function goBack(fallbackPath = '/decks') {
 
 /**
  * ハッシュ変更イベントのハンドラ。
- * ページ切替とコールバック実行を行う。
  */
 function handleHashChange() {
   const { route, params } = parseCurrentRoute();
   activatePage(route);
 
-  // 登録済みコールバックを全て実行
   _onRouteChangeCallbacks.forEach((cb) => {
     try {
       cb(route, params);
@@ -148,7 +158,6 @@ function handleHashChange() {
 
 /**
  * ルーターを初期化する。
- * hashchangeイベントをリッスンし、初期ルートを処理する。
  */
 export function init() {
   window.addEventListener('hashchange', () => {
@@ -156,11 +165,9 @@ export function init() {
     handleHashChange();
   });
 
-  // 初期ルートが未設定の場合はデッキ一覧を設定
   if (!window.location.hash) {
-    window.location.hash = '#/decks'; // これがhashchangeをトリガーする
+    window.location.hash = '#/login';
   } else {
-    // すでにハッシュがある場合は即座にハンドリング
     handleHashChange();
   }
 }

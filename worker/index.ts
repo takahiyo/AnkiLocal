@@ -7,16 +7,56 @@ type Bindings = {
   ASSETS: Fetcher;
 };
 
-const app = new Hono<{ Bindings: Bindings }>().basePath("/api");
+type UserContext = {
+  id: number;
+  username: string;
+  is_admin: boolean;
+};
 
-// --- トークン認証ミドルウェア ---
+const app = new Hono<{ Bindings: Bindings; Variables: { user: UserContext | null } }>().basePath("/api");
+
+// --- パスワードハッシュ ---
+async function sha256(text: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// --- セッショントークン生成 ---
+function generateToken(): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  const bytes = new Uint8Array(48);
+  crypto.getRandomValues(bytes);
+  for (let i = 0; i < 48; i++) {
+    result += chars[bytes[i] % chars.length];
+  }
+  return result;
+}
+
+// --- 認証ミドルウェア ---
 app.use("*", async (c, next) => {
-  // 環境変数 ACCESS_TOKEN を参照、設定されていない場合はデフォルト値を使用
-  const expectedToken = (c.env as any).ACCESS_TOKEN || "ankilocal-secret";
+  const db = c.env.DB;
 
-  // APIルート（/api/で始まるパス）のみトークン認証を実施
+  // 自動マイグレーション
+  await runMigrations(db);
+
   const url = new URL(c.req.url);
-  if (url.pathname.startsWith("/api/")) {
+  const pathname = url.pathname;
+
+  // 認証が不要なエンドポイント
+  const publicPaths = ["/api/auth/login", "/api/auth/register"];
+  if (publicPaths.includes(pathname)) {
+    c.set("user", null);
+    await next();
+    return;
+  }
+
+  // APIルートはセッショントークン認証
+  if (pathname.startsWith("/api/")) {
     let token = c.req.query("token");
     if (!token) {
       const authHeader = c.req.header("Authorization");
@@ -25,63 +65,144 @@ app.use("*", async (c, next) => {
       }
     }
 
-    if (token !== expectedToken) {
-      return c.json({ error: "認証エラー: 無効なトークンです" }, 401);
+    if (!token) {
+      return c.json({ error: "認証エラー: ログインしてください" }, 401);
     }
+
+    const user = await db
+      .prepare("SELECT id, username, is_admin FROM users WHERE session_token = ?")
+      .bind(token)
+      .first<{ id: number; username: string; is_admin: number }>();
+
+    if (!user) {
+      return c.json({ error: "認証エラー: 無効なセッションです。再ログインしてください" }, 401);
+    }
+
+    c.set("user", { id: user.id, username: user.username, is_admin: !!user.is_admin });
   }
-
-  // 自動マイグレーション (lapsesカラムの追加等)
-  try {
-    await c.env.DB.prepare("ALTER TABLE card_states ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0").run();
-  } catch (e) {}
-
-  try {
-    await c.env.DB.prepare("ALTER TABLE deck_options ADD COLUMN excluded_tags TEXT NOT NULL DEFAULT ''").run();
-  } catch (e) {}
-
-  try {
-    await c.env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS deck_options (
-          deck_id          INTEGER PRIMARY KEY,
-          max_new_cards    INTEGER NOT NULL DEFAULT 20,
-          max_review_cards INTEGER NOT NULL DEFAULT 100,
-          review_order     TEXT NOT NULL DEFAULT 'random',
-          excluded_tags    TEXT NOT NULL DEFAULT '',
-          FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE
-      )
-    `).run();
-  } catch (e) {}
 
   await next();
 });
 
-// 未定義ルート（静的アセットへのアクセス）をCloudflare Pagesにフォールスルーし、
-// HTMLレスポンスには認証トークンを埋め込む
-app.notFound(async (c) => {
-  const response = await c.env.ASSETS.fetch(c.req.raw);
-  const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("text/html")) {
-    const token = (c.env as any).ACCESS_TOKEN || "ankilocal-secret";
-    const html = await response.text();
-    const injected = html.replace(
-      "</head>",
-      `<script>window.__ANKI_TOKEN__ = "${token}";</script></head>`
-    );
-    return new Response(injected, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
-  }
-  return response;
-});
+// --- 自動マイグレーション ---
+let migrationDone = false;
+
+async function runMigrations(db: D1Database) {
+  if (migrationDone) return;
+
+  // users テーブル作成
+  try {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS users (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        username        TEXT NOT NULL UNIQUE,
+        password_hash   TEXT NOT NULL,
+        session_token   TEXT,
+        is_admin        INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `).run();
+  } catch (e) {}
+
+  // card_states の user_id 対応マイグレーション
+  try {
+    const info = await db.prepare("PRAGMA table_info(card_states)").all<{ name: string }>();
+    const hasUserId = info.results.some((r) => r.name === "user_id");
+    if (!hasUserId) {
+      const hasOldLapses = info.results.some((r) => r.name === "lapses");
+
+      // 古い card_states を新しいスキーマに移行
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS card_states_new (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          card_id         INTEGER NOT NULL,
+          user_id         INTEGER NOT NULL,
+          ease_factor     REAL NOT NULL DEFAULT 2.5,
+          interval_days   REAL NOT NULL DEFAULT 0,
+          repetitions     INTEGER NOT NULL DEFAULT 0,
+          lapses          INTEGER NOT NULL DEFAULT 0,
+          next_review_at  TEXT,
+          last_reviewed_at TEXT,
+          status          TEXT NOT NULL DEFAULT 'new',
+          FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(card_id, user_id)
+        )
+      `).run();
+
+      const lapsesCol = hasOldLapses ? "COALESCE(lapses, 0)" : "0";
+      await db.prepare(`
+        INSERT OR IGNORE INTO card_states_new (card_id, user_id, ease_factor, interval_days, repetitions, lapses, next_review_at, last_reviewed_at, status)
+        SELECT card_id, 1, ease_factor, interval_days, repetitions, ${lapsesCol}, next_review_at, last_reviewed_at, status
+        FROM card_states
+      `).run();
+
+      await db.prepare("DROP TABLE card_states").run();
+      await db.prepare("ALTER TABLE card_states_new RENAME TO card_states").run();
+    }
+  } catch (e) {}
+
+  // review_logs に user_id 追加
+  try {
+    await db.prepare("ALTER TABLE review_logs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1").run();
+  } catch (e) {}
+
+  // deck_options の user_id 対応マイグレーション
+  try {
+    const info = await db.prepare("PRAGMA table_info(deck_options)").all<{ name: string }>();
+    const hasUserId = info.results.some((r) => r.name === "user_id");
+    if (!hasUserId) {
+      const hasExcludedTags = info.results.some((r) => r.name === "excluded_tags");
+
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS deck_options_new (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          deck_id          INTEGER NOT NULL,
+          user_id          INTEGER NOT NULL,
+          max_new_cards    INTEGER NOT NULL DEFAULT 20,
+          max_review_cards INTEGER NOT NULL DEFAULT 100,
+          review_order     TEXT NOT NULL DEFAULT 'random',
+          excluded_tags    TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(deck_id, user_id)
+        )
+      `).run();
+
+      const excludedTagsCol = hasExcludedTags ? "excluded_tags" : "''";
+      await db.prepare(`
+        INSERT OR IGNORE INTO deck_options_new (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
+        SELECT deck_id, 1, max_new_cards, max_review_cards, review_order, ${excludedTagsCol}
+        FROM deck_options
+      `).run();
+
+      await db.prepare("DROP TABLE deck_options").run();
+      await db.prepare("ALTER TABLE deck_options_new RENAME TO deck_options").run();
+    }
+  } catch (e) {}
+
+  // 管理者アカウントのシード（id=1）
+  try {
+    const adminHash = await sha256("SukilHaakuAdmin116");
+    await db.prepare(`
+      INSERT OR IGNORE INTO users (id, username, password_hash, is_admin)
+      VALUES (1, '2379862', ?, 1)
+    `).bind(adminHash).run();
+  } catch (e) {}
+
+  migrationDone = true;
+}
+
+// --- ユーザーIDを取得するヘルパー ---
+function getUserId(c: any): number {
+  const user = c.get("user") as UserContext | null;
+  if (!user) throw new Error("認証が必要です");
+  return user.id;
+}
 
 // --- APIレスポンス用のヘルパー関数 ---
 
-/**
- * デッキごとのカード内訳を集計する
- */
-async function getDeckCounts(db: D1Database, deckId: number) {
+async function getDeckCounts(db: D1Database, deckId: number, userId: number) {
   const query = `
     SELECT
       COUNT(*) as total,
@@ -89,10 +210,10 @@ async function getDeckCounts(db: D1Database, deckId: number) {
       SUM(CASE WHEN cs.status = 'learning' THEN 1 ELSE 0 END) as learning_count,
       SUM(CASE WHEN cs.status = 'review' THEN 1 ELSE 0 END) as review_count
     FROM cards c
-    LEFT JOIN card_states cs ON c.id = cs.card_id
+    LEFT JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
     WHERE c.deck_id = ?
   `;
-  const result = await db.prepare(query).bind(deckId).first<{
+  const result = await db.prepare(query).bind(userId, deckId).first<{
     total: number;
     new_count: number;
     learning_count: number;
@@ -107,18 +228,13 @@ async function getDeckCounts(db: D1Database, deckId: number) {
   };
 }
 
-/**
- * 出題タグ（包含）を考慮したカード数を取得する
- * チェックされたタグのいずれかを持っているカードをカウント（OR）
- */
-async function getStudyableCount(db: D1Database, deckId: number, excludedTags: string) {
+async function getStudyableCount(db: D1Database, deckId: number, excludedTags: string, userId: number) {
   const excludedList = excludedTags ? excludedTags.trim().split(/\s+/).filter(Boolean) : [];
   if (excludedList.length === 0) {
-    const counts = await getDeckCounts(db, deckId);
+    const counts = await getDeckCounts(db, deckId, userId);
     return counts.total;
   }
 
-  // 全ユニークタグを取得
   const { results: allRows } = await db
     .prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''")
     .bind(deckId)
@@ -130,26 +246,256 @@ async function getStudyableCount(db: D1Database, deckId: number, excludedTags: s
     }
   }
 
-  // 包含タグ = 全タグ − 除外タグ
-  const includedTags = [...allTags].filter(t => !excludedList.includes(t));
+  const includedTags = [...allTags].filter((t) => !excludedList.includes(t));
   if (includedTags.length === 0) return 0;
 
   const conditions = includedTags.map(() => `INSTR(' ' || c.tags || ' ', ?) > 0`);
-  const params: any[] = includedTags.map(t => ` ${t} `);
-  const result = await db.prepare(`
-    SELECT COUNT(*) as total FROM cards c
-    WHERE c.deck_id = ? AND (${conditions.join(' OR ')})
-  `).bind(deckId, ...params).first<{ total: number }>();
+  const params: any[] = includedTags.map((t) => ` ${t} `);
+  const result = await db
+    .prepare(`SELECT COUNT(*) as total FROM cards c WHERE c.deck_id = ? AND (${conditions.join(" OR ")})`)
+    .bind(deckId, ...params)
+    .first<{ total: number }>();
   return result?.total || 0;
 }
 
+// --- 認証エンドポイント ---
+
+app.post("/auth/login", async (c) => {
+  const db = c.env.DB;
+  try {
+    const { username, password } = await c.req.json<{ username: string; password: string }>();
+
+    if (!username || username.trim() === "") {
+      return c.json({ error: "IDを入力してください" }, 400);
+    }
+
+    const user = await db
+      .prepare("SELECT id, username, password_hash, is_admin FROM users WHERE username = ?")
+      .bind(username.trim())
+      .first<{ id: number; username: string; password_hash: string; is_admin: number }>();
+
+    if (!user) {
+      // IDが存在しない
+      if (!password || password.trim() === "") {
+        return c.json({ status: "new_account", username: username.trim() }, 200);
+      }
+      return c.json({ error: "アカウントが存在しません" }, 404);
+    }
+
+    // IDが存在する → パスワード検証
+    const inputHash = await sha256(password);
+    if (inputHash !== user.password_hash) {
+      return c.json({ error: "パスワードが正しくありません" }, 401);
+    }
+
+    // ログイン成功 → セッショントークン発行
+    const token = generateToken();
+    await db.prepare("UPDATE users SET session_token = ? WHERE id = ?").bind(token, user.id).run();
+
+    return c.json({
+      success: true,
+      token,
+      is_admin: !!user.is_admin,
+      username: user.username,
+    });
+  } catch (err: any) {
+    return c.json({ error: `ログインエラー: ${err.message}` }, 500);
+  }
+});
+
+app.post("/auth/register", async (c) => {
+  const db = c.env.DB;
+  try {
+    const { username, password } = await c.req.json<{ username: string; password: string }>();
+
+    if (!username || username.trim() === "") {
+      return c.json({ error: "IDを入力してください" }, 400);
+    }
+    if (!password || password.trim() === "") {
+      return c.json({ error: "パスワードを入力してください" }, 400);
+    }
+
+    const uname = username.trim();
+    const existing = await db.prepare("SELECT id FROM users WHERE username = ?").bind(uname).first();
+    if (existing) {
+      return c.json({ error: "このIDは既に使用されています" }, 409);
+    }
+
+    const passwordHash = await sha256(password);
+    const token = generateToken();
+    await db
+      .prepare("INSERT INTO users (username, password_hash, session_token, is_admin) VALUES (?, ?, ?, 0)")
+      .bind(uname, passwordHash, token)
+      .run();
+
+    return c.json({
+      success: true,
+      token,
+      is_admin: false,
+      username: uname,
+    });
+  } catch (err: any) {
+    return c.json({ error: `アカウント作成エラー: ${err.message}` }, 500);
+  }
+});
+
+app.post("/auth/logout", async (c) => {
+  const db = c.env.DB;
+  try {
+    const userId = getUserId(c);
+    await db.prepare("UPDATE users SET session_token = NULL WHERE id = ?").bind(userId).run();
+    return c.json({ success: true });
+  } catch (err: any) {
+    return c.json({ error: `ログアウトエラー: ${err.message}` }, 500);
+  }
+});
+
+app.get("/auth/me", async (c) => {
+  const user = c.get("user") as UserContext | null;
+  if (!user) {
+    return c.json({ error: "認証されていません" }, 401);
+  }
+  return c.json({
+    id: user.id,
+    username: user.username,
+    is_admin: user.is_admin,
+  });
+});
+
+// --- 管理者用ユーティリティ ---
+
+function requireAdmin(c: any): UserContext {
+  const user = c.get("user") as UserContext | null;
+  if (!user || !user.is_admin) {
+    throw new Error("管理者権限が必要です");
+  }
+  return user;
+}
+
+// --- 管理者エンドポイント ---
+
+// ユーザー一覧
+app.get("/admin/users", async (c) => {
+  const db = c.env.DB;
+  try {
+    requireAdmin(c);
+    const { results: users } = await db
+      .prepare("SELECT id, username, is_admin, created_at, session_token IS NOT NULL as logged_in FROM users ORDER BY id")
+      .all<{ id: number; username: string; is_admin: number; created_at: string; logged_in: number }>();
+
+    return c.json(
+      users.map((u) => ({
+        id: u.id,
+        username: u.username,
+        is_admin: !!u.is_admin,
+        created_at: u.created_at,
+        logged_in: !!u.logged_in,
+      }))
+    );
+  } catch (err: any) {
+    if (err.message === "管理者権限が必要です") {
+      return c.json({ error: err.message }, 403);
+    }
+    return c.json({ error: `ユーザー一覧取得エラー: ${err.message}` }, 500);
+  }
+});
+
+// アカウント削除
+app.delete("/admin/users/:userId", async (c) => {
+  const db = c.env.DB;
+  try {
+    const admin = requireAdmin(c);
+    const userId = parseInt(c.req.param("userId"), 10);
+
+    if (isNaN(userId)) return c.json({ error: "無効なユーザーIDです" }, 400);
+
+    const target = await db
+      .prepare("SELECT id, username, is_admin FROM users WHERE id = ?")
+      .bind(userId)
+      .first<{ id: number; username: string; is_admin: number }>();
+
+    if (!target) return c.json({ error: "ユーザーが見つかりません" }, 404);
+    if (target.is_admin) return c.json({ error: "管理者アカウントは削除できません" }, 400);
+    if (target.id === admin.id) return c.json({ error: "自分自身は削除できません" }, 400);
+
+    // 関連データ削除 + ユーザー削除
+    await db.batch([
+      db.prepare("DELETE FROM card_states WHERE user_id = ?").bind(userId),
+      db.prepare("DELETE FROM review_logs WHERE user_id = ?").bind(userId),
+      db.prepare("DELETE FROM deck_options WHERE user_id = ?").bind(userId),
+      db.prepare("DELETE FROM users WHERE id = ?").bind(userId),
+    ]);
+
+    return c.json({ success: true, message: `アカウント「${target.username}」を削除しました` });
+  } catch (err: any) {
+    if (err.message === "管理者権限が必要です") {
+      return c.json({ error: err.message }, 403);
+    }
+    return c.json({ error: `アカウント削除エラー: ${err.message}` }, 500);
+  }
+});
+
+// パスワード変更
+app.post("/admin/users/:userId/password", async (c) => {
+  const db = c.env.DB;
+  try {
+    requireAdmin(c);
+    const userId = parseInt(c.req.param("userId"), 10);
+
+    if (isNaN(userId)) return c.json({ error: "無効なユーザーIDです" }, 400);
+
+    const { password } = await c.req.json<{ password: string }>();
+    if (!password || password.trim() === "") {
+      return c.json({ error: "新しいパスワードを入力してください" }, 400);
+    }
+
+    const target = await db.prepare("SELECT id, username FROM users WHERE id = ?").bind(userId).first<{ id: number; username: string }>();
+    if (!target) return c.json({ error: "ユーザーが見つかりません" }, 404);
+
+    const passwordHash = await sha256(password);
+    await db.prepare("UPDATE users SET password_hash = ?, session_token = NULL WHERE id = ?").bind(passwordHash, userId).run();
+
+    return c.json({ success: true, message: `アカウント「${target.username}」のパスワードを変更しました` });
+  } catch (err: any) {
+    if (err.message === "管理者権限が必要です") {
+      return c.json({ error: err.message }, 403);
+    }
+    return c.json({ error: `パスワード変更エラー: ${err.message}` }, 500);
+  }
+});
+
+// 学習状態リセット
+app.post("/admin/users/:userId/reset", async (c) => {
+  const db = c.env.DB;
+  try {
+    requireAdmin(c);
+    const userId = parseInt(c.req.param("userId"), 10);
+
+    if (isNaN(userId)) return c.json({ error: "無効なユーザーIDです" }, 400);
+
+    const target = await db.prepare("SELECT id, username FROM users WHERE id = ?").bind(userId).first<{ id: number; username: string }>();
+    if (!target) return c.json({ error: "ユーザーが見つかりません" }, 404);
+
+    // 学習状態をリセット（card_statesを削除して再作成 = 初期状態に戻す）
+    await db.batch([
+      db.prepare("DELETE FROM review_logs WHERE user_id = ?").bind(userId),
+      db.prepare("DELETE FROM card_states WHERE user_id = ?").bind(userId),
+    ]);
+
+    return c.json({ success: true, message: `アカウント「${target.username}」の学習状態をリセットしました` });
+  } catch (err: any) {
+    if (err.message === "管理者権限が必要です") {
+      return c.json({ error: err.message }, 403);
+    }
+    return c.json({ error: `学習状態リセットエラー: ${err.message}` }, 500);
+  }
+});
+
 // --- ルーティング定義 ---
 
-/**
- * GET: デッキ一覧取得
- */
 app.get("/decks", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   try {
     const { results: decks } = await db
       .prepare("SELECT id, name, created_at FROM decks ORDER BY name")
@@ -157,27 +503,24 @@ app.get("/decks", async (c) => {
 
     const result = [];
     for (const deck of decks) {
-      const counts = await getDeckCounts(db, deck.id);
+      const counts = await getDeckCounts(db, deck.id, userId);
 
-      // オプション取得（日次タスク上限＋除外タグ）
       const options = await db
-        .prepare("SELECT max_new_cards, max_review_cards, excluded_tags FROM deck_options WHERE deck_id = ?")
-        .bind(deck.id)
+        .prepare("SELECT max_new_cards, max_review_cards, excluded_tags FROM deck_options WHERE deck_id = ? AND user_id = ?")
+        .bind(deck.id, userId)
         .first<{ max_new_cards: number; max_review_cards: number; excluded_tags: string }>();
       const dailyTaskLimit = (options?.max_new_cards || 20) + (options?.max_review_cards || 100);
 
-      // 除外タグ考慮の出題可能カード数
-      const studyableCount = await getStudyableCount(db, deck.id, options?.excluded_tags || '');
+      const studyableCount = await getStudyableCount(db, deck.id, options?.excluded_tags || "", userId);
 
-      // 今日の復習数
       const todayStart = new Date();
       todayStart.setUTCHours(0, 0, 0, 0);
       const todayResult = await db
         .prepare(
           `SELECT COUNT(*) as today FROM review_logs
-           WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?)`
+           WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?) AND user_id = ?`
         )
-        .bind(todayStart.toISOString(), deck.id)
+        .bind(todayStart.toISOString(), deck.id, userId)
         .first<{ today: number }>();
       const reviewsToday = todayResult?.today || 0;
       const dailyRemaining = Math.max(0, dailyTaskLimit - reviewsToday);
@@ -202,15 +545,12 @@ app.get("/decks", async (c) => {
       });
     }
 
-    return c.json(result, 200, { 'Cache-Control': 'no-store, no-cache, must-revalidate' });
+    return c.json(result, 200, { "Cache-Control": "no-store, no-cache, must-revalidate" });
   } catch (err: any) {
     return c.json({ error: `デッキ一覧取得エラー: ${err.message}` }, 500);
   }
 });
 
-/**
- * POST: デッキテキストファイルのインポート
- */
 app.post("/import", async (c) => {
   const db = c.env.DB;
   try {
@@ -233,27 +573,23 @@ app.post("/import", async (c) => {
       });
     }
 
-    // デッキ名 -> IDのキャッシュ
     const deckCache: Record<string, number> = {};
     const decksCreated: string[] = [];
     const uniqueNotes = new Set<string>();
-    
-    const uniqueDeckNames = Array.from(new Set(parsedCards.map(c => c.deck_name)));
 
-    // 1. 既存デッキの取得
-    const existingDecks = await db.prepare("SELECT id, name FROM decks").all<{ id: number, name: string }>();
+    const uniqueDeckNames = Array.from(new Set(parsedCards.map((c) => c.deck_name)));
+
+    const existingDecks = await db.prepare("SELECT id, name FROM decks").all<{ id: number; name: string }>();
     for (const d of existingDecks.results) {
       deckCache[d.name] = d.id;
     }
 
-    // 2. 不足しているデッキをマルチ行INSERTで作成
-    const missingDecks = uniqueDeckNames.filter(name => !deckCache[name]);
+    const missingDecks = uniqueDeckNames.filter((name) => !deckCache[name]);
     if (missingDecks.length > 0) {
       const deckPlaceholders = missingDecks.map(() => "(?)").join(", ");
       await db.prepare(`INSERT OR IGNORE INTO decks (name) VALUES ${deckPlaceholders}`).bind(...missingDecks).run();
-      
-      // 作成したデッキのIDを再取得
-      const newDecks = await db.prepare("SELECT id, name FROM decks").all<{ id: number, name: string }>();
+
+      const newDecks = await db.prepare("SELECT id, name FROM decks").all<{ id: number; name: string }>();
       for (const d of newDecks.results) {
         deckCache[d.name] = d.id;
         if (missingDecks.includes(d.name)) {
@@ -263,17 +599,15 @@ app.post("/import", async (c) => {
     }
 
     let cardsCreated = 0;
-    
-    // 3. マルチ行INSERTステートメントを準備（10件ずつ = 90バインド変数でD1上限を回避）
-    //    全ステートメントを db.batch() で一括送信し、サブリクエストを1回に抑える
+
     const BATCH_SIZE = 10;
     const insertStmts: ReturnType<typeof db.prepare>[] = [];
-    
+
     for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
       const chunk = parsedCards.slice(i, i + BATCH_SIZE);
       const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
       const params: any[] = [];
-      
+
       for (const card of chunk) {
         uniqueNotes.add(card.guid);
         params.push(
@@ -288,22 +622,17 @@ app.post("/import", async (c) => {
           card.is_reversed ? 1 : 0
         );
       }
-      
+
       insertStmts.push(
-        db.prepare(
-          `INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`
-        ).bind(...params)
+        db
+          .prepare(`INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`)
+          .bind(...params)
       );
     }
-    
-    // card_states の一括作成もバッチに含める
-    insertStmts.push(
-      db.prepare("INSERT OR IGNORE INTO card_states (card_id) SELECT id FROM cards")
-    );
-    
-    // 全ステートメントを1回のバッチ（=1サブリクエスト）で実行
+
+    insertStmts.push(db.prepare("INSERT OR IGNORE INTO card_states (card_id, user_id) SELECT id, 1 FROM cards"));
+
     const batchResults = await db.batch(insertStmts);
-    // 最後の1つは card_states なので除外してカウント
     for (let r = 0; r < batchResults.length - 1; r++) {
       if (batchResults[r].meta && batchResults[r].meta.changes) {
         cardsCreated += batchResults[r].meta.changes;
@@ -312,20 +641,22 @@ app.post("/import", async (c) => {
 
     const skipped = parsedCards.length - cardsCreated;
 
-    // 5. デッキごとのカード数を一括取得（サブリクエスト節約）
-    const { results: deckCountRows } = await db.prepare(`
-      SELECT c.deck_id, COUNT(*) as total
-      FROM cards c
-      WHERE c.deck_id IN (${uniqueDeckNames.map(() => '?').join(',')})
-      GROUP BY c.deck_id
-    `).bind(...uniqueDeckNames.map(n => deckCache[n])).all<{ deck_id: number; total: number }>();
-    
+    const { results: deckCountRows } = await db
+      .prepare(
+        `SELECT c.deck_id, COUNT(*) as total
+         FROM cards c
+         WHERE c.deck_id IN (${uniqueDeckNames.map(() => "?").join(",")})
+         GROUP BY c.deck_id`
+      )
+      .bind(...uniqueDeckNames.map((n) => deckCache[n]))
+      .all<{ deck_id: number; total: number }>();
+
     const deckCountMap: Record<number, number> = {};
     for (const row of deckCountRows) {
       deckCountMap[row.deck_id] = row.total;
     }
-    
-    const importedDecks = uniqueDeckNames.map(name => ({
+
+    const importedDecks = uniqueDeckNames.map((name) => ({
       name,
       card_count: deckCountMap[deckCache[name]] || 0,
     }));
@@ -347,29 +678,28 @@ app.post("/import", async (c) => {
   }
 });
 
-// ==========================================
-// 6. デッキオプション (Options)
-// ==========================================
-
 // デッキオプション取得
 app.get("/decks/:deckId/options", async (c) => {
   const db: D1Database = c.env.DB;
+  const userId = getUserId(c);
   const deckIdStr = c.req.param("deckId");
   const deckId = parseInt(deckIdStr, 10);
 
   if (isNaN(deckId)) return c.json({ error: "無効なデッキIDです" }, 400);
 
   let options = await db
-    .prepare("SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ?")
-    .bind(deckId)
+    .prepare(
+      "SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ? AND user_id = ?"
+    )
+    .bind(deckId, userId)
     .first<{ max_new_cards: number; max_review_cards: number; review_order: string; excluded_tags: string }>();
 
   if (!options) {
     options = {
       max_new_cards: 20,
       max_review_cards: 100,
-      review_order: 'random',
-      excluded_tags: ''
+      review_order: "random",
+      excluded_tags: "",
     };
   }
 
@@ -379,34 +709,35 @@ app.get("/decks/:deckId/options", async (c) => {
 // デッキオプション更新
 app.post("/decks/:deckId/options", async (c) => {
   const db: D1Database = c.env.DB;
+  const userId = getUserId(c);
   const deckIdStr = c.req.param("deckId");
   const deckId = parseInt(deckIdStr, 10);
 
   if (isNaN(deckId)) return c.json({ error: "無効なデッキIDです" }, 400);
 
   const body = await c.req.json();
-  const maxNew = typeof body.max_new_cards === 'number' ? body.max_new_cards : 20;
-  const maxRev = typeof body.max_review_cards === 'number' ? body.max_review_cards : 100;
-  const order = body.review_order === 'sequential' ? 'sequential' : 'random';
-  const excludedTags = typeof body.excluded_tags === 'string' ? body.excluded_tags : '';
+  const maxNew = typeof body.max_new_cards === "number" ? body.max_new_cards : 20;
+  const maxRev = typeof body.max_review_cards === "number" ? body.max_review_cards : 100;
+  const order = body.review_order === "sequential" ? "sequential" : "random";
+  const excludedTags = typeof body.excluded_tags === "string" ? body.excluded_tags : "";
 
-  await db.prepare(`
-    INSERT INTO deck_options (deck_id, max_new_cards, max_review_cards, review_order, excluded_tags)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(deck_id) DO UPDATE SET
-      max_new_cards = excluded.max_new_cards,
-      max_review_cards = excluded.max_review_cards,
-      review_order = excluded.review_order,
-      excluded_tags = excluded.excluded_tags
-  `).bind(deckId, maxNew, maxRev, order, excludedTags).run();
+  await db
+    .prepare(
+      `INSERT INTO deck_options (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(deck_id, user_id) DO UPDATE SET
+         max_new_cards = excluded.max_new_cards,
+         max_review_cards = excluded.max_review_cards,
+         review_order = excluded.review_order,
+         excluded_tags = excluded.excluded_tags`
+    )
+    .bind(deckId, userId, maxNew, maxRev, order, excludedTags)
+    .run();
 
   return c.json({ success: true });
 });
 
-// ==========================================
-// 7. デッキ内タグ一覧
-// ==========================================
-
+// デッキ内タグ一覧
 app.get("/decks/:deckId/tags", async (c) => {
   const db: D1Database = c.env.DB;
   const deckId = parseInt(c.req.param("deckId"), 10);
@@ -434,37 +765,38 @@ app.get("/decks/:deckId/tags", async (c) => {
   }
 });
 
-// ==========================================
-// 8. 出題 (Study)
-// ==========================================
-
+// 出題
 app.get("/decks/:deckId/study", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   const deckId = parseInt(c.req.param("deckId"), 10);
 
   try {
-    // デッキ存在確認
     const deckExists = await db.prepare("SELECT id FROM decks WHERE id = ?").bind(deckId).first();
     if (!deckExists) {
       return c.json({ error: "デッキが見つかりません" }, 404);
     }
 
     const nowIso = new Date().toISOString();
-    const batchSize = 20; // STUDY_BATCH_SIZE
 
     const cards: any[] = [];
 
-    let options = await db.prepare("SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ?").bind(deckId).first<{max_new_cards: number, max_review_cards: number, review_order: string, excluded_tags: string}>();
+    let options = await db
+      .prepare(
+        "SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ? AND user_id = ?"
+      )
+      .bind(deckId, userId)
+      .first<{ max_new_cards: number; max_review_cards: number; review_order: string; excluded_tags: string }>();
     if (!options) {
-      options = { max_new_cards: 20, max_review_cards: 100, review_order: 'random', excluded_tags: '' };
+      options = { max_new_cards: 20, max_review_cards: 100, review_order: "random", excluded_tags: "" };
     }
 
-    // 除外タグの代わりに包含タグ（OR）条件を構築
-    const excludedTagList = options.excluded_tags ? options.excluded_tags.trim().split(/\s+/).filter(Boolean) : [];
-    let tagFilterSql = '';
+    const excludedTagList = options.excluded_tags
+      ? options.excluded_tags.trim().split(/\s+/).filter(Boolean)
+      : [];
+    let tagFilterSql = "";
     const tagFilterParams: any[] = [];
     if (excludedTagList.length > 0) {
-      // 全ユニークタグを取得して包含タグを算出
       const { results: tagRows } = await db
         .prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''")
         .bind(deckId)
@@ -475,61 +807,68 @@ app.get("/decks/:deckId/study", async (c) => {
           if (t) allTags.add(t);
         }
       }
-      const includedTags = [...allTags].filter(t => !excludedTagList.includes(t));
+      const includedTags = [...allTags].filter((t) => !excludedTagList.includes(t));
       if (includedTags.length > 0) {
         const conditions = includedTags.map(() => `INSTR(' ' || c.tags || ' ', ?) > 0`);
-        tagFilterParams.push(...includedTags.map(t => ` ${t} `));
-        tagFilterSql = ` AND (${conditions.join(' OR ')})`;
+        tagFilterParams.push(...includedTags.map((t) => ` ${t} `));
+        tagFilterSql = ` AND (${conditions.join(" OR ")})`;
       } else {
-        // 包含タグがない = 全タグ除外 → 空結果
-        tagFilterSql = ' AND 1=0';
+        tagFilterSql = " AND 1=0";
       }
     }
 
-    // 1. new カード
+    // Ensure card_states row exists for this user
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO card_states (card_id, user_id)
+         SELECT c.id, ? FROM cards c LEFT JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
+         WHERE c.deck_id = ? AND cs.id IS NULL`
+      )
+      .bind(userId, userId, deckId)
+      .run();
+
+    // 1. new cards
     const newBatchSize = options.max_new_cards;
     if (newBatchSize > 0) {
       const { results: newCards } = await db
         .prepare(
           `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
-           JOIN card_states cs ON c.id = cs.card_id
+           JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
            WHERE c.deck_id = ? AND cs.status = 'new'${tagFilterSql}
            ORDER BY c.id
            LIMIT ?`
         )
-        .bind(deckId, ...tagFilterParams, newBatchSize)
+        .bind(userId, deckId, ...tagFilterParams, newBatchSize)
         .all();
       cards.push(...newCards);
     }
 
-    // 2. review / learning カード
+    // 2. review/learning cards
     const reviewBatchSize = options.max_review_cards;
     if (reviewBatchSize > 0) {
       const { results: reviewCards } = await db
         .prepare(
           `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
-           JOIN card_states cs ON c.id = cs.card_id
+           JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
            WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
              AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)${tagFilterSql}
            ORDER BY cs.next_review_at
            LIMIT ?`
         )
-        .bind(deckId, nowIso, ...tagFilterParams, reviewBatchSize)
+        .bind(userId, deckId, nowIso, ...tagFilterParams, reviewBatchSize)
         .all();
       cards.push(...reviewCards);
     }
 
-    // シャッフルまたは順次並び替え
-    if (options.review_order === 'random') {
+    if (options.review_order === "random") {
       for (let i = cards.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [cards[i], cards[j]] = [cards[j], cards[i]];
       }
     }
 
-    // レスポンスマッピング
     return c.json(
       cards.map((row) => ({
         id: row.id,
@@ -555,13 +894,12 @@ app.get("/decks/:deckId/study", async (c) => {
   }
 });
 
-/**
- * POST: 復習結果の登録
- */
+// 復習結果の登録
 app.post("/cards/:cardId/review", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   const cardId = parseInt(c.req.param("cardId"), 10);
-  
+
   try {
     const { rating } = await c.req.json<{ rating: number }>();
 
@@ -569,9 +907,17 @@ app.post("/cards/:cardId/review", async (c) => {
       return c.json({ error: "不正な評価値です (1-4)" }, 400);
     }
 
+    // Ensure card_states exists for this user
+    await db
+      .prepare("INSERT OR IGNORE INTO card_states (card_id, user_id) VALUES (?, ?)")
+      .bind(cardId, userId)
+      .run();
+
     const stateRow = await db
-      .prepare("SELECT ease_factor, interval_days, repetitions, lapses, status FROM card_states WHERE card_id = ?")
-      .bind(cardId)
+      .prepare(
+        "SELECT ease_factor, interval_days, repetitions, lapses, status FROM card_states WHERE card_id = ? AND user_id = ?"
+      )
+      .bind(cardId, userId)
       .first<{ ease_factor: number; interval_days: number; repetitions: number; lapses: number; status: string }>();
 
     if (!stateRow) {
@@ -592,24 +938,28 @@ app.post("/cards/:cardId/review", async (c) => {
     const nowIso = new Date().toISOString();
     const nextReviewIso = result.nextReviewAt.toISOString();
 
-    // トランザクション的に更新を実行
     await db.batch([
-      db.prepare(
-        `UPDATE card_states
-         SET ease_factor = ?, interval_days = ?, repetitions = ?, lapses = ?,
-             next_review_at = ?, last_reviewed_at = ?, status = ?
-         WHERE card_id = ?`
-      ).bind(
-        result.easeFactor,
-        result.intervalDays,
-        result.repetitions,
-        result.lapses,
-        nextReviewIso,
-        nowIso,
-        result.status,
-        cardId
-      ),
-      db.prepare("INSERT INTO review_logs (card_id, rating, reviewed_at) VALUES (?, ?, ?)").bind(cardId, rating, nowIso)
+      db
+        .prepare(
+          `UPDATE card_states
+           SET ease_factor = ?, interval_days = ?, repetitions = ?, lapses = ?,
+               next_review_at = ?, last_reviewed_at = ?, status = ?
+           WHERE card_id = ? AND user_id = ?`
+        )
+        .bind(
+          result.easeFactor,
+          result.intervalDays,
+          result.repetitions,
+          result.lapses,
+          nextReviewIso,
+          nowIso,
+          result.status,
+          cardId,
+          userId
+        ),
+      db
+        .prepare("INSERT INTO review_logs (card_id, user_id, rating, reviewed_at) VALUES (?, ?, ?, ?)")
+        .bind(cardId, userId, rating, nowIso),
     ]);
 
     return c.json({
@@ -627,18 +977,15 @@ app.post("/cards/:cardId/review", async (c) => {
   }
 });
 
-/**
- * 統計情報の共通集計処理
- */
-async function aggregateStats(db: D1Database, deckId?: number) {
-  let cardWhere = "";
-  let cardParams: any[] = [];
+// 統計情報の共通集計処理
+async function aggregateStats(db: D1Database, userId: number, deckId?: number) {
+  let cardWhere = "WHERE cs.user_id = ?";
+  let cardParams: any[] = [userId];
   if (deckId !== undefined) {
-    cardWhere = "WHERE c.deck_id = ?";
-    cardParams = [deckId];
+    cardWhere = "WHERE c.deck_id = ? AND cs.user_id = ?";
+    cardParams = [deckId, userId];
   }
 
-  // 各種ステータスカード数のカウント
   const countsQuery = `
     SELECT
       COUNT(*) as total,
@@ -646,47 +993,48 @@ async function aggregateStats(db: D1Database, deckId?: number) {
       SUM(CASE WHEN cs.status = 'learning' THEN 1 ELSE 0 END) as learning_count,
       SUM(CASE WHEN cs.status = 'review' THEN 1 ELSE 0 END) as review_count
     FROM cards c
-    LEFT JOIN card_states cs ON c.id = cs.card_id
-    ${cardWhere}
+    LEFT JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
+    ${deckId !== undefined ? "WHERE c.deck_id = ?" : ""}
   `;
-  const counts = await db.prepare(countsQuery).bind(...cardParams).first<{
-    total: number;
-    new_count: number;
-    learning_count: number;
-    review_count: number;
-  }>();
+  const counts = await db
+    .prepare(countsQuery)
+    .bind(userId, ...(deckId !== undefined ? [deckId] : []))
+    .first<{
+      total: number;
+      new_count: number;
+      learning_count: number;
+      review_count: number;
+    }>();
 
   const total = counts?.total || 0;
   const newCount = counts?.new_count || 0;
   const learningCount = counts?.learning_count || 0;
   const reviewCount = counts?.review_count || 0;
-  // 習得済み: 全体 - 未着手 - 学習中 - 復習待ち
   const masteredCount = Math.max(0, total - (newCount + learningCount + reviewCount));
 
-  // 復習ログ総数
-  let reviewWhere = "";
-  let reviewParams: any[] = [];
+  let reviewWhere = "WHERE user_id = ?";
+  let reviewParams: any[] = [userId];
   if (deckId !== undefined) {
-    reviewWhere = "WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ?)";
-    reviewParams = [deckId];
+    reviewWhere = "WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ?) AND user_id = ?";
+    reviewParams = [deckId, userId];
   }
   const totalReviewsResult = await db
     .prepare(`SELECT COUNT(*) as total FROM review_logs ${reviewWhere}`)
     .bind(...reviewParams)
     .first<{ total: number }>();
 
-  // 今日の復習数 (UTC基準の本日0時以降)
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
   const todayStartIso = todayStart.toISOString();
-  
-  let todayWhere = "WHERE reviewed_at >= ?";
-  let todayParams: any[] = [todayStartIso];
+
+  let todayWhere = "WHERE reviewed_at >= ? AND user_id = ?";
+  let todayParams: any[] = [todayStartIso, userId];
   if (deckId !== undefined) {
-    todayWhere = "WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?)";
-    todayParams = [todayStartIso, deckId];
+    todayWhere =
+      "WHERE reviewed_at >= ? AND card_id IN (SELECT id FROM cards WHERE deck_id = ?) AND user_id = ?";
+    todayParams = [todayStartIso, deckId, userId];
   }
-  
+
   const todayReviewsResult = await db
     .prepare(`SELECT COUNT(*) as today FROM review_logs ${todayWhere}`)
     .bind(...todayParams)
@@ -700,28 +1048,25 @@ async function aggregateStats(db: D1Database, deckId?: number) {
     mastered_count: masteredCount,
     total_reviews: totalReviewsResult?.total || 0,
     reviews_today: todayReviewsResult?.today || 0,
-    
-    // バックエンド/models.pyのフィールド名互換
     new_cards: newCount,
     learning_cards: learningCount,
     review_cards: reviewCount,
   };
 }
 
-/**
- * GET: 全体統計
- */
 app.get("/stats", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   try {
-    const mainStats = await aggregateStats(db);
+    const mainStats = await aggregateStats(db, userId);
 
-    // デッキ別の統計リストも返す (stats.js がテーブル描画で使用する)
-    const { results: decks } = await db.prepare("SELECT id, name FROM decks ORDER BY name").all<{ id: number; name: string }>();
+    const { results: decks } = await db
+      .prepare("SELECT id, name FROM decks ORDER BY name")
+      .all<{ id: number; name: string }>();
     const deckStatsList = [];
 
     for (const deck of decks) {
-      const counts = await getDeckCounts(db, deck.id);
+      const counts = await getDeckCounts(db, deck.id, userId);
       const studyReady = counts.new_count + counts.learning_count + counts.review_count;
       const mastered = Math.max(0, counts.total - studyReady);
 
@@ -745,19 +1090,20 @@ app.get("/stats", async (c) => {
   }
 });
 
-/**
- * GET: デッキ別統計
- */
 app.get("/stats/deck/:deckId", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   const deckId = parseInt(c.req.param("deckId"), 10);
   try {
-    const deckRow = await db.prepare("SELECT name FROM decks WHERE id = ?").bind(deckId).first<{ name: string }>();
+    const deckRow = await db
+      .prepare("SELECT name FROM decks WHERE id = ?")
+      .bind(deckId)
+      .first<{ name: string }>();
     if (!deckRow) {
       return c.json({ error: "デッキが見つかりません" }, 404);
     }
 
-    const deckStats = await aggregateStats(db, deckId);
+    const deckStats = await aggregateStats(db, userId, deckId);
 
     return c.json({
       ...deckStats,
@@ -767,6 +1113,25 @@ app.get("/stats/deck/:deckId", async (c) => {
   } catch (err: any) {
     return c.json({ error: `デッキ別統計取得エラー: ${err.message}` }, 500);
   }
+});
+
+// 未定義ルート（静的アセットへのアクセス）をCloudflare Pagesにフォールスルー
+app.notFound(async (c) => {
+  const response = await c.env.ASSETS.fetch(c.req.raw);
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("text/html")) {
+    const html = await response.text();
+    const injected = html.replace(
+      "</head>",
+      `<script>window.__ANKI_TOKEN__ = "";</script></head>`
+    );
+    return new Response(injected, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+  return response;
 });
 
 export default app;
