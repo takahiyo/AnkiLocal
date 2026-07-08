@@ -140,13 +140,18 @@ function showCard() {
     const inner = container.querySelector('.study-card-inner');
     if (inner) {
       inner.style.transition = 'none';
-      inner.style.transform = '';  // rotateX(180deg) を即座に解除
-      void inner.offsetHeight;
-      inner.style.transition = ''; // transition 再開
+      inner.style.transform = 'none';  // <-- 'none' でCSSの rotateX(180deg) をinline上書き
+      void inner.offsetHeight;         // reflow: 即座に前面へスナップ
     }
 
-    // flipped解除 → 次のカードアニメーション
+    // flippedを解除（inlineが効いているので既に前面だが、クリーンに）
     container.classList.remove('flipped', 'next-card-anim');
+
+    // inline解除 → 次のカード演出に移行
+    if (inner) {
+      inner.style.transform = '';      // inline削除
+      inner.style.transition = '';     // transition再開
+    }
     void container.offsetHeight;
     container.classList.add('next-card-anim');
 
