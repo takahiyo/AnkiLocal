@@ -341,6 +341,7 @@ async function saveOptions() {
     });
     showToast('オプションを保存しました', 'success');
     closeOptionsModal();
+    loadDeckList();
   } catch (err) {
     showToast(`オプションの保存に失敗しました: ${err.message}`, 'error');
   }
