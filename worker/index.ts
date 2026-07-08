@@ -116,6 +116,20 @@ async function getStudyableCount(db: D1Database, deckId: number, excludedTags: s
     const counts = await getDeckCounts(db, deckId);
     return counts.total;
   }
+
+  // 全タグが除外されている場合は0
+  const { results: allRows } = await db
+    .prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''")
+    .bind(deckId)
+    .all<{ tags: string }>();
+  const uniqueTags = new Set<string>();
+  for (const row of allRows) {
+    for (const tag of row.tags.trim().split(/\s+/)) {
+      if (tag) uniqueTags.add(tag);
+    }
+  }
+  if (uniqueTags.size > 0 && tagList.length >= uniqueTags.size) return 0;
+
   const conditions = tagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
   const params: any[] = tagList.map(t => ` ${t} `);
   const result = await db.prepare(`

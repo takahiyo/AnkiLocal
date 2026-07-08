@@ -2454,6 +2454,14 @@ async function getStudyableCount(db, deckId, excludedTags) {
     const counts = await getDeckCounts(db, deckId);
     return counts.total;
   }
+  const { results: allRows } = await db.prepare("SELECT tags FROM cards WHERE deck_id = ? AND tags != ''").bind(deckId).all();
+  const uniqueTags = /* @__PURE__ */ new Set();
+  for (const row of allRows) {
+    for (const tag of row.tags.trim().split(/\s+/)) {
+      if (tag) uniqueTags.add(tag);
+    }
+  }
+  if (uniqueTags.size > 0 && tagList.length >= uniqueTags.size) return 0;
   const conditions = tagList.map(() => `INSTR(' ' || c.tags || ' ', ?) = 0`);
   const params = tagList.map((t) => ` ${t} `);
   const result = await db.prepare(`

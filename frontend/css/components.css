@@ -580,9 +580,15 @@
 }
 
 .tag-count {
+  display: inline-block;
   font-size: var(--font-size-xs);
-  color: var(--text-muted);
+  font-weight: var(--font-weight-semibold);
+  color: var(--accent-primary);
+  background: rgba(124, 58, 237, 0.12);
+  padding: 1px 6px;
+  border-radius: var(--border-radius-full);
   margin-left: var(--spacing-xs);
+  line-height: 1.3;
 }
 
 .tag-checklist-empty {
