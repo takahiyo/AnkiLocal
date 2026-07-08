@@ -20,6 +20,7 @@ let _currentIndex = 0;     // 現在のカードインデックス
 let _isFlipped = false;    // フリップ状態
 let _isProcessing = false; // レビュー送信中フラグ（二重送信防止）
 let _currentDeckId = null; // 現在のデッキID
+let _animTimeoutId = null; // next-card-anim 解除用タイマーID
 
 /**
  * トースト通知（main.jsのグローバル関数経由）
@@ -50,6 +51,10 @@ export async function startStudySession(deckId) {
   _isFlipped = false;
   _isProcessing = false;
   _cards = [];
+  if (_animTimeoutId !== null) {
+    clearTimeout(_animTimeoutId);
+    _animTimeoutId = null;
+  }
 
   // UIリセット
   const cardSection = $(STUDY_IDS.CARD_SECTION);
@@ -125,21 +130,29 @@ function showCard() {
   // 次にアニメーション状態をリセット
   const container = $(STUDY_IDS.CARD_CONTAINER);
   if (container) {
+    // 前回の next-card-anim 解除タイマーを確実にキャンセル
+    if (_animTimeoutId !== null) {
+      clearTimeout(_animTimeoutId);
+      _animTimeoutId = null;
+    }
+
     // transitionを無効化して強制的に表面にスナップさせる
-    // これがないと flipped 削除時のCSS transition (0.6s) と
-    // next-card-anim の keyframe animation (0.4s) が競合して表示が崩れる
     const inner = container.querySelector('.study-card-inner');
     if (inner) {
       inner.style.transition = 'none';
-      inner.style.transform = '';
+      inner.style.transform = '';  // rotateX(180deg) を即座に解除
       void inner.offsetHeight;
-      inner.style.transition = '';
+      inner.style.transition = ''; // transition 再開
     }
+
+    // flipped解除 → 次のカードアニメーション
     container.classList.remove('flipped', 'next-card-anim');
     void container.offsetHeight;
     container.classList.add('next-card-anim');
-    setTimeout(() => {
+
+    _animTimeoutId = setTimeout(() => {
       container.classList.remove('next-card-anim');
+      _animTimeoutId = null;
     }, 400);
   }
 
@@ -348,6 +361,10 @@ function updateIntervalDisplay(card) {
  * 学習完了画面を表示する。
  */
 function showComplete() {
+  if (_animTimeoutId !== null) {
+    clearTimeout(_animTimeoutId);
+    _animTimeoutId = null;
+  }
   const cardSection = $(STUDY_IDS.CARD_SECTION);
   const completeSection = $(STUDY_IDS.COMPLETE_SECTION);
 
