@@ -2434,14 +2434,17 @@ async function runMigrations(db) {
       )
     `).run();
   } catch (e) {
+    console.error("[Migration] users table creation error:", e);
   }
   try {
     const info = await db.prepare("PRAGMA table_info(card_states)").all();
-    const hasUserId = info.results.some((r) => r.name === "user_id");
+    const columnNames = info.results.map((r) => r.name);
+    const hasUserId = columnNames.includes("user_id");
     if (!hasUserId) {
-      const hasOldLapses = info.results.some((r) => r.name === "lapses");
+      console.log("[Migration] card_states missing user_id, starting migration...");
+      await db.prepare("ALTER TABLE card_states RENAME TO card_states_old").run();
       await db.prepare(`
-        CREATE TABLE IF NOT EXISTS card_states_new (
+        CREATE TABLE card_states (
           id              INTEGER PRIMARY KEY AUTOINCREMENT,
           card_id         INTEGER NOT NULL,
           user_id         INTEGER NOT NULL,
@@ -2457,28 +2460,48 @@ async function runMigrations(db) {
           UNIQUE(card_id, user_id)
         )
       `).run();
+      const hasOldLapses = columnNames.includes("lapses");
       const lapsesCol = hasOldLapses ? "COALESCE(lapses, 0)" : "0";
       await db.prepare(`
-        INSERT OR IGNORE INTO card_states_new (card_id, user_id, ease_factor, interval_days, repetitions, lapses, next_review_at, last_reviewed_at, status)
+        INSERT OR IGNORE INTO card_states (card_id, user_id, ease_factor, interval_days, repetitions, lapses, next_review_at, last_reviewed_at, status)
         SELECT card_id, 1, ease_factor, interval_days, repetitions, ${lapsesCol}, next_review_at, last_reviewed_at, status
-        FROM card_states
+        FROM card_states_old
       `).run();
-      await db.prepare("DROP TABLE card_states").run();
-      await db.prepare("ALTER TABLE card_states_new RENAME TO card_states").run();
+      await db.prepare("DROP TABLE IF EXISTS card_states_old").run();
+      console.log("[Migration] card_states migrated successfully");
     }
   } catch (e) {
+    console.error("[Migration] card_states migration error:", e);
+    try {
+      const check = await db.prepare("PRAGMA table_info(card_states_old)").all();
+      if (check.results.length > 0) {
+        await db.prepare("DROP TABLE IF EXISTS card_states").run();
+        await db.prepare("ALTER TABLE card_states_old RENAME TO card_states").run();
+        console.log("[Migration] card_states migration rolled back");
+      }
+    } catch (recoverErr) {
+      console.error("[Migration] card_states recovery failed:", recoverErr);
+    }
   }
   try {
-    await db.prepare("ALTER TABLE review_logs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1").run();
+    const info = await db.prepare("PRAGMA table_info(review_logs)").all();
+    if (!info.results.some((r) => r.name === "user_id")) {
+      await db.prepare("ALTER TABLE review_logs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1").run();
+      console.log("[Migration] review_logs.user_id added");
+    }
   } catch (e) {
+    console.error("[Migration] review_logs migration error:", e);
   }
   try {
     const info = await db.prepare("PRAGMA table_info(deck_options)").all();
-    const hasUserId = info.results.some((r) => r.name === "user_id");
+    const columnNames = info.results.map((r) => r.name);
+    const hasUserId = columnNames.includes("user_id");
     if (!hasUserId) {
-      const hasExcludedTags = info.results.some((r) => r.name === "excluded_tags");
+      console.log("[Migration] deck_options missing user_id, starting migration...");
+      await db.prepare("ALTER TABLE deck_options RENAME TO deck_options_old").run();
+      const hasExcludedTags = columnNames.includes("excluded_tags");
       await db.prepare(`
-        CREATE TABLE IF NOT EXISTS deck_options_new (
+        CREATE TABLE deck_options (
           id               INTEGER PRIMARY KEY AUTOINCREMENT,
           deck_id          INTEGER NOT NULL,
           user_id          INTEGER NOT NULL,
@@ -2493,14 +2516,25 @@ async function runMigrations(db) {
       `).run();
       const excludedTagsCol = hasExcludedTags ? "excluded_tags" : "''";
       await db.prepare(`
-        INSERT OR IGNORE INTO deck_options_new (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
+        INSERT OR IGNORE INTO deck_options (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
         SELECT deck_id, 1, max_new_cards, max_review_cards, review_order, ${excludedTagsCol}
-        FROM deck_options
+        FROM deck_options_old
       `).run();
-      await db.prepare("DROP TABLE deck_options").run();
-      await db.prepare("ALTER TABLE deck_options_new RENAME TO deck_options").run();
+      await db.prepare("DROP TABLE IF EXISTS deck_options_old").run();
+      console.log("[Migration] deck_options migrated successfully");
     }
   } catch (e) {
+    console.error("[Migration] deck_options migration error:", e);
+    try {
+      const check = await db.prepare("PRAGMA table_info(deck_options_old)").all();
+      if (check.results.length > 0) {
+        await db.prepare("DROP TABLE IF EXISTS deck_options").run();
+        await db.prepare("ALTER TABLE deck_options_old RENAME TO deck_options").run();
+        console.log("[Migration] deck_options migration rolled back");
+      }
+    } catch (recoverErr) {
+      console.error("[Migration] deck_options recovery failed:", recoverErr);
+    }
   }
   try {
     const adminHash = await sha256("SukilHaakuAdmin116");
@@ -2509,6 +2543,7 @@ async function runMigrations(db) {
       VALUES (1, '2379862', ?, 1)
     `).bind(adminHash).run();
   } catch (e) {
+    console.error("[Migration] admin seed error:", e);
   }
   migrationDone = true;
 }

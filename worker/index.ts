@@ -102,18 +102,24 @@ async function runMigrations(db: D1Database) {
         created_at      TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `).run();
-  } catch (e) {}
+  } catch (e) {
+    console.error("[Migration] users table creation error:", e);
+  }
 
   // card_states の user_id 対応マイグレーション
   try {
     const info = await db.prepare("PRAGMA table_info(card_states)").all<{ name: string }>();
-    const hasUserId = info.results.some((r) => r.name === "user_id");
-    if (!hasUserId) {
-      const hasOldLapses = info.results.some((r) => r.name === "lapses");
+    const columnNames = info.results.map((r: any) => r.name);
+    const hasUserId = columnNames.includes("user_id");
 
-      // 古い card_states を新しいスキーマに移行
+    if (!hasUserId) {
+      console.log("[Migration] card_states missing user_id, starting migration...");
+      // 1. 安全にリネーム（DDLは暗黙コミットされるので単独で実行）
+      await db.prepare("ALTER TABLE card_states RENAME TO card_states_old").run();
+
+      // 2. 新しいテーブルを作成
       await db.prepare(`
-        CREATE TABLE IF NOT EXISTS card_states_new (
+        CREATE TABLE card_states (
           id              INTEGER PRIMARY KEY AUTOINCREMENT,
           card_id         INTEGER NOT NULL,
           user_id         INTEGER NOT NULL,
@@ -130,32 +136,58 @@ async function runMigrations(db: D1Database) {
         )
       `).run();
 
+      // 3. 旧データを移行（user_id=1 = 管理者に紐付け）
+      const hasOldLapses = columnNames.includes("lapses");
       const lapsesCol = hasOldLapses ? "COALESCE(lapses, 0)" : "0";
       await db.prepare(`
-        INSERT OR IGNORE INTO card_states_new (card_id, user_id, ease_factor, interval_days, repetitions, lapses, next_review_at, last_reviewed_at, status)
+        INSERT OR IGNORE INTO card_states (card_id, user_id, ease_factor, interval_days, repetitions, lapses, next_review_at, last_reviewed_at, status)
         SELECT card_id, 1, ease_factor, interval_days, repetitions, ${lapsesCol}, next_review_at, last_reviewed_at, status
-        FROM card_states
+        FROM card_states_old
       `).run();
 
-      await db.prepare("DROP TABLE card_states").run();
-      await db.prepare("ALTER TABLE card_states_new RENAME TO card_states").run();
+      // 4. 旧テーブル削除
+      await db.prepare("DROP TABLE IF EXISTS card_states_old").run();
+      console.log("[Migration] card_states migrated successfully");
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error("[Migration] card_states migration error:", e);
+    // リカバリ: card_states_old が残っていれば元に戻す試行
+    try {
+      const check = await db.prepare("PRAGMA table_info(card_states_old)").all();
+      if (check.results.length > 0) {
+        await db.prepare("DROP TABLE IF EXISTS card_states").run();
+        await db.prepare("ALTER TABLE card_states_old RENAME TO card_states").run();
+        console.log("[Migration] card_states migration rolled back");
+      }
+    } catch (recoverErr) {
+      console.error("[Migration] card_states recovery failed:", recoverErr);
+    }
+  }
 
   // review_logs に user_id 追加
   try {
-    await db.prepare("ALTER TABLE review_logs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1").run();
-  } catch (e) {}
+    const info = await db.prepare("PRAGMA table_info(review_logs)").all<{ name: string }>();
+    if (!info.results.some((r: any) => r.name === "user_id")) {
+      await db.prepare("ALTER TABLE review_logs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1").run();
+      console.log("[Migration] review_logs.user_id added");
+    }
+  } catch (e) {
+    console.error("[Migration] review_logs migration error:", e);
+  }
 
   // deck_options の user_id 対応マイグレーション
   try {
     const info = await db.prepare("PRAGMA table_info(deck_options)").all<{ name: string }>();
-    const hasUserId = info.results.some((r) => r.name === "user_id");
-    if (!hasUserId) {
-      const hasExcludedTags = info.results.some((r) => r.name === "excluded_tags");
+    const columnNames = info.results.map((r: any) => r.name);
+    const hasUserId = columnNames.includes("user_id");
 
+    if (!hasUserId) {
+      console.log("[Migration] deck_options missing user_id, starting migration...");
+      await db.prepare("ALTER TABLE deck_options RENAME TO deck_options_old").run();
+
+      const hasExcludedTags = columnNames.includes("excluded_tags");
       await db.prepare(`
-        CREATE TABLE IF NOT EXISTS deck_options_new (
+        CREATE TABLE deck_options (
           id               INTEGER PRIMARY KEY AUTOINCREMENT,
           deck_id          INTEGER NOT NULL,
           user_id          INTEGER NOT NULL,
@@ -171,15 +203,27 @@ async function runMigrations(db: D1Database) {
 
       const excludedTagsCol = hasExcludedTags ? "excluded_tags" : "''";
       await db.prepare(`
-        INSERT OR IGNORE INTO deck_options_new (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
+        INSERT OR IGNORE INTO deck_options (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
         SELECT deck_id, 1, max_new_cards, max_review_cards, review_order, ${excludedTagsCol}
-        FROM deck_options
+        FROM deck_options_old
       `).run();
 
-      await db.prepare("DROP TABLE deck_options").run();
-      await db.prepare("ALTER TABLE deck_options_new RENAME TO deck_options").run();
+      await db.prepare("DROP TABLE IF EXISTS deck_options_old").run();
+      console.log("[Migration] deck_options migrated successfully");
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error("[Migration] deck_options migration error:", e);
+    try {
+      const check = await db.prepare("PRAGMA table_info(deck_options_old)").all();
+      if (check.results.length > 0) {
+        await db.prepare("DROP TABLE IF EXISTS deck_options").run();
+        await db.prepare("ALTER TABLE deck_options_old RENAME TO deck_options").run();
+        console.log("[Migration] deck_options migration rolled back");
+      }
+    } catch (recoverErr) {
+      console.error("[Migration] deck_options recovery failed:", recoverErr);
+    }
+  }
 
   // 管理者アカウントのシード（id=1）
   try {
@@ -188,7 +232,9 @@ async function runMigrations(db: D1Database) {
       INSERT OR IGNORE INTO users (id, username, password_hash, is_admin)
       VALUES (1, '2379862', ?, 1)
     `).bind(adminHash).run();
-  } catch (e) {}
+  } catch (e) {
+    console.error("[Migration] admin seed error:", e);
+  }
 
   migrationDone = true;
 }

@@ -87,6 +87,9 @@
                         </div>
                         <div id="register-error" class="auth-error hidden"></div>
                         <form id="register-form" class="auth-form">
+                            <div class="form-group" style="display: none;">
+                                <input type="text" id="register-username-hidden" autocomplete="username" tabindex="-1" aria-hidden="true">
+                            </div>
                             <div class="form-group">
                                 <label for="register-password">パスワード</label>
                                 <input type="password" id="register-password" class="form-control" placeholder="パスワードを入力" autocomplete="new-password" required>
@@ -417,7 +420,7 @@
                 <h3 id="admin-password-title" class="modal-title">パスワード変更</h3>
             </div>
             <div id="admin-password-error" class="auth-error hidden"></div>
-            <div class="auth-form">
+            <form id="admin-password-form" class="auth-form" style="margin: 0;">
                 <div class="form-group">
                     <label for="admin-password-input">新しいパスワード</label>
                     <input type="password" id="admin-password-input" class="form-control" placeholder="新しいパスワード" autocomplete="new-password">
@@ -426,7 +429,7 @@
                     <label for="admin-password-confirm">新しいパスワード（確認）</label>
                     <input type="password" id="admin-password-confirm" class="form-control" placeholder="パスワードを再入力" autocomplete="new-password">
                 </div>
-            </div>
+            </form>
             <div style="display: flex; gap: var(--spacing-md); justify-content: flex-end; margin-top: var(--spacing-lg);">
                 <button id="admin-password-cancel" class="btn btn-secondary">キャンセル</button>
                 <button id="admin-password-submit" class="btn btn-primary">変更</button>

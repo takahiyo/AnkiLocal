@@ -177,6 +177,11 @@ function setupAuth() {
             if (displayEl) {
                 displayEl.textContent = decodeURIComponent(params.username);
             }
+            // 隠しフィールドにもセット（アクセシビリティ要件）
+            const hiddenEl = document.getElementById('register-username-hidden');
+            if (hiddenEl) {
+                hiddenEl.value = decodeURIComponent(params.username);
+            }
             // パスワードフィールドをクリア
             document.getElementById(AUTH_IDS.REGISTER_PASSWORD).value = '';
             document.getElementById(AUTH_IDS.REGISTER_PASSWORD_CONFIRM).value = '';
