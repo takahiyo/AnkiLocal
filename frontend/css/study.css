@@ -74,7 +74,7 @@
 }
 
 /* =============================================
-    カード表示（show/hide方式）
+   カード表示（absolute重ね + opacity切替）
    ============================================= */
 .study-card-container {
   width: 100%;
@@ -91,29 +91,14 @@
   min-height: 300px;
 }
 
-/* フリップ状態: 表面を隠し裏面を表示 */
-.study-card-container.flipped .study-card-front {
-  display: none;
-}
-.study-card-container:not(.flipped) .study-card-back {
-  display: none;
-}
-
-/* 次のカード遷移アニメーション */
-.study-card-container.next-card-anim .study-card-inner {
-  animation: flipInNext 0.4s ease-out forwards;
-}
-
-@keyframes flipInNext {
-  0% { opacity: 0; transform: translateY(10px); }
-  100% { opacity: 1; transform: translateY(0); }
-}
-
-/* カード表面・裏面共通 */
+/* 両面を absolute で重ねて container を満たす */
 .study-card-front,
 .study-card-back {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
+  height: 100%;
   min-height: 300px;
   border-radius: var(--border-radius-xl);
   background: var(--gradient-card), var(--bg-card);
@@ -128,6 +113,34 @@
   overflow-wrap: break-word;
   word-break: break-word;
   overflow: auto;
+}
+
+/* フリップ: opacityで表示面を切り替え（transform不使用） */
+.study-card-container.flipped .study-card-front {
+  opacity: 0;
+  pointer-events: none;
+}
+.study-card-container:not(.flipped) .study-card-back {
+  opacity: 0;
+  pointer-events: none;
+}
+.study-card-container.flipped .study-card-back {
+  opacity: 1;
+  pointer-events: auto;
+}
+.study-card-container:not(.flipped) .study-card-front {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 次のカード遷移アニメーション */
+.study-card-container.next-card-anim .study-card-inner {
+  animation: fadeInNext 0.35s ease-out forwards;
+}
+
+@keyframes fadeInNext {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
 .card-content {
