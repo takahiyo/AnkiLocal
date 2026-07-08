@@ -96,22 +96,27 @@ function showCard() {
   const card = _cards[_currentIndex];
   _isFlipped = false;
 
-  // フリップ状態を無条件にリセット
   const container = $(STUDY_IDS.CARD_CONTAINER);
+
+  // カード切替時にtransitionを無効化して強制的に表面に戻す
+  const inner = container?.querySelector('.study-card-inner');
+  if (inner) {
+    inner.style.transition = 'none';
+    inner.style.transform = '';
+    void inner.offsetHeight;
+    inner.style.transition = '';
+  }
   if (container) {
-    container.classList.remove('flipped');
-    container.classList.remove('next-card-anim');
-    void container.offsetWidth;
+    container.classList.remove('flipped', 'next-card-anim');
+    void container.offsetHeight;
     container.classList.add('next-card-anim');
     setTimeout(() => {
       container.classList.remove('next-card-anim');
     }, 400);
   }
 
-  // ノートタイプに応じたテキスト生成
   const { frontHtml, backHtml, metaText } = renderCardContent(card);
 
-  // DOM更新
   const frontText = $(STUDY_IDS.CARD_FRONT_TEXT);
   const backText = $(STUDY_IDS.CARD_BACK_TEXT);
   const meta = $(STUDY_IDS.CARD_META);
@@ -120,13 +125,11 @@ function showCard() {
   if (backText) backText.innerHTML = backHtml;
   if (meta) meta.textContent = metaText;
 
-  // ボタン表示制御: 答えを見るボタンを表示、評価ボタンを非表示
   const showAnswerBtn = $(STUDY_IDS.SHOW_ANSWER_BTN);
   const ratingButtons = $(STUDY_IDS.RATING_BUTTONS);
   if (showAnswerBtn) showAnswerBtn.classList.remove('hidden');
   if (ratingButtons) ratingButtons.classList.add('hidden');
 
-  // 進捗更新
   updateProgress();
 }
 
