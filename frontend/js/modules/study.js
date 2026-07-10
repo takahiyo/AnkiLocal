@@ -197,9 +197,21 @@ function renderCardContent(card) {
   // Clozeタイプ（サーバー側で既にレンダリング済みのため直接表示）
   if (noteType === NOTE_TYPES.CLOZE) {
     const targetIndex = card.cloze_index || 1;
+    let frontHtml = htmlLineBreaks(card.front || '');
+    let backHtml = card.back || '';
+
+    // サーバー側で <span> が付与されていない場合（既存データ）、
+    // [...] や [hint] を cloze-placeholder でラップする
+    if (!frontHtml.includes('cloze-placeholder')) {
+      frontHtml = frontHtml.replace(/\[([^\]]*)\]/g, '<span class="cloze-placeholder">[$1]</span>');
+    }
+
+    // 解答面の <strong> に青色を常に適用（既存データ互換）
+    backHtml = backHtml.replace(/<strong\b[^>]*>/g, '<strong style="color: #1976D2;">');
+
     return {
-      frontHtml: card.front || '', // サーバー生成の<span>タグを含むHTMLをそのまま使用
-      backHtml: card.back || '', // サーバー生成の<strong>タグ等を含むHTMLをそのまま使用
+      frontHtml,
+      backHtml,
       metaText: `Cloze (c${targetIndex})`,
     };
   }
