@@ -2446,9 +2446,13 @@ function calculateNextReview(state, rating) {
   let lapses = state.lapses ?? 0;
   let status = state.status ?? "new";
   if (interval === 0) {
-    if (rating === 1 /* AGAIN */ || rating === 2 /* HARD */) {
+    if (rating === 1 /* AGAIN */) {
       interval = 0;
-      if (rating === 1 /* AGAIN */) lapses += 1;
+      lapses += 1;
+      status = "learning";
+      reps = 0;
+    } else if (rating === 2 /* HARD */) {
+      interval = 15 / (24 * 60);
       status = "learning";
       reps = 0;
     } else if (rating === 3 /* GOOD */) {

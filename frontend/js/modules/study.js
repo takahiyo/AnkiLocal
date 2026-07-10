@@ -525,7 +525,8 @@ function calculateNextInterval(card, rating) {
   let interval = card.interval_days ?? 0;
   
   if (interval === 0) {
-    if (rating === 1 || rating === 2) return 0;
+    if (rating === 1) return 0;
+    if (rating === 2) return 15 / (24 * 60); // 15分
     if (rating === 3) return 1;
     if (rating === 4) return 4;
   } else {
@@ -542,7 +543,11 @@ function calculateNextInterval(card, rating) {
  */
 function formatInterval(days) {
   if (days === 0) return "1分後";
-  if (days < 1) return `${Math.round(days * 24)}時間後`;
+  if (days < 1) {
+    const minutes = Math.round(days * 24 * 60);
+    if (minutes < 60) return `${minutes}分後`;
+    return `${Math.round(days * 24)}時間後`;
+  }
   if (days < 30) return `${Math.round(days)}日後`;
   if (days < 365) return `${Math.round(days / 30)}ヶ月後`;
   return `${(days / 365).toFixed(1)}年後`;

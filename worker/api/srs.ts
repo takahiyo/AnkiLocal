@@ -52,9 +52,13 @@ export function calculateNextReview(state: SRSState, rating: Rating): SRSResult 
 
   // 新規・再学習カード
   if (interval === 0) {
-    if (rating === Rating.AGAIN || rating === Rating.HARD) {
+    if (rating === Rating.AGAIN) {
       interval = 0; // 今日中に再出題
-      if (rating === Rating.AGAIN) lapses += 1;
+      lapses += 1;
+      status = "learning";
+      reps = 0;
+    } else if (rating === Rating.HARD) {
+      interval = 15 / (24 * 60); // 15分
       status = "learning";
       reps = 0;
     } else if (rating === Rating.GOOD) {
@@ -118,6 +122,7 @@ export function calculateNextReview(state: SRSState, rating: Rating): SRSResult 
 export function previewNextIntervals(state: SRSState): { again: string, hard: string, good: string, easy: string } {
   const formatInterval = (days: number) => {
     if (days === 0) return "< 1m";
+    if (days < 1 / 24) return `${Math.round(days * 24 * 60)}m`;
     if (days < 1) return `${Math.round(days * 24)}h`;
     if (days < 30) return `${Math.round(days)}d`;
     if (days < 365) return `${Math.round(days / 30)}mo`;
