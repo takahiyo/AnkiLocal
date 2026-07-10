@@ -68,9 +68,16 @@ export async function startStudySession(deckId) {
 
   try {
     const data = await fetchStudyCards(deckId);
-    _cards = data.cards || data;
-    _reviewsToday = data.reviews_today || 0;
-    _dailyLimit = data.daily_limit || _cards.length;
+    // Handle both old format (array) and new format ({ cards, reviews_today, daily_limit })
+    if (Array.isArray(data)) {
+      _cards = data;
+      _reviewsToday = 0;
+      _dailyLimit = _cards.length;
+    } else {
+      _cards = Array.isArray(data.cards) ? data.cards : [];
+      _reviewsToday = data.reviews_today || 0;
+      _dailyLimit = data.daily_limit || _cards.length;
+    }
     console.log(`[Study] Loaded ${_cards.length} cards, reviews_today=${_reviewsToday}, daily_limit=${_dailyLimit}, first card_id=${_cards[0]?.id}`);
 
     // デッキ名を取得して表示
