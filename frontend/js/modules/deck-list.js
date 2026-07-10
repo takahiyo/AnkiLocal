@@ -224,6 +224,7 @@ async function openOptionsModal(deckId) {
   const newCardsInput = document.getElementById('option-new-cards');
   const reviewCardsInput = document.getElementById('option-review-cards');
   const reviewOrderSelect = document.getElementById('option-review-order');
+  const excludeReversedChk = document.getElementById('option-exclude-reversed');
 
   if (!newCardsInput || !reviewCardsInput || !reviewOrderSelect) {
     showToast('モーダル要素が見つかりません', 'error');
@@ -241,6 +242,7 @@ async function openOptionsModal(deckId) {
     newCardsInput.value = options.max_new_cards;
     reviewCardsInput.value = options.max_review_cards;
     reviewOrderSelect.value = options.review_order;
+    if (excludeReversedChk) excludeReversedChk.checked = !!options.exclude_reversed;
 
     currentExcludedTags = new Set(
       (options.excluded_tags || '').trim().split(/\s+/).filter(Boolean)
@@ -323,6 +325,8 @@ async function saveOptions() {
   const maxNew = parseInt(document.getElementById('option-new-cards').value, 10);
   const maxRev = parseInt(document.getElementById('option-review-cards').value, 10);
   const order = document.getElementById('option-review-order').value;
+  const excludeReversedChk = document.getElementById('option-exclude-reversed');
+  const excludeReversed = excludeReversedChk ? excludeReversedChk.checked : false;
 
   // チェックが外れているタグを除外対象として保存
   const excludedTags = [];
@@ -337,7 +341,8 @@ async function saveOptions() {
       max_new_cards: isNaN(maxNew) ? 20 : maxNew,
       max_review_cards: isNaN(maxRev) ? 100 : maxRev,
       review_order: order,
-      excluded_tags: excludedTags.join(' ')
+      excluded_tags: excludedTags.join(' '),
+      exclude_reversed: excludeReversed
     });
     showToast('オプションを保存しました', 'success');
     closeOptionsModal();

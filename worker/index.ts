@@ -195,6 +195,7 @@ async function runMigrations(db: D1Database) {
           max_review_cards INTEGER NOT NULL DEFAULT 100,
           review_order     TEXT NOT NULL DEFAULT 'random',
           excluded_tags    TEXT NOT NULL DEFAULT '',
+          exclude_reversed INTEGER NOT NULL DEFAULT 0,
           FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE,
           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
           UNIQUE(deck_id, user_id)
@@ -203,8 +204,8 @@ async function runMigrations(db: D1Database) {
 
       const excludedTagsCol = hasExcludedTags ? "excluded_tags" : "''";
       await db.prepare(`
-        INSERT OR IGNORE INTO deck_options (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
-        SELECT deck_id, 1, max_new_cards, max_review_cards, review_order, ${excludedTagsCol}
+        INSERT OR IGNORE INTO deck_options (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags, exclude_reversed)
+        SELECT deck_id, 1, max_new_cards, max_review_cards, review_order, ${excludedTagsCol}, 0
         FROM deck_options_old
       `).run();
 
@@ -223,6 +224,17 @@ async function runMigrations(db: D1Database) {
     } catch (recoverErr) {
       console.error("[Migration] deck_options recovery failed:", recoverErr);
     }
+  }
+
+  // deck_options に exclude_reversed カラムがなければ追加
+  try {
+    const info = await db.prepare("PRAGMA table_info(deck_options)").all<{ name: string }>();
+    if (!info.results.some((r: any) => r.name === "exclude_reversed")) {
+      await db.prepare("ALTER TABLE deck_options ADD COLUMN exclude_reversed INTEGER NOT NULL DEFAULT 0").run();
+      console.log("[Migration] deck_options.exclude_reversed added");
+    }
+  } catch (e) {
+    console.error("[Migration] deck_options.exclude_reversed migration error:", e);
   }
 
   // 管理者アカウントのシード（id=1）
@@ -735,10 +747,10 @@ app.get("/decks/:deckId/options", async (c) => {
 
   let options = await db
     .prepare(
-      "SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ? AND user_id = ?"
+      "SELECT max_new_cards, max_review_cards, review_order, excluded_tags, exclude_reversed FROM deck_options WHERE deck_id = ? AND user_id = ?"
     )
     .bind(deckId, userId)
-    .first<{ max_new_cards: number; max_review_cards: number; review_order: string; excluded_tags: string }>();
+    .first<{ max_new_cards: number; max_review_cards: number; review_order: string; excluded_tags: string; exclude_reversed: number }>();
 
   if (!options) {
     options = {
@@ -746,6 +758,7 @@ app.get("/decks/:deckId/options", async (c) => {
       max_review_cards: 100,
       review_order: "random",
       excluded_tags: "",
+      exclude_reversed: 0,
     };
   }
 
@@ -766,18 +779,20 @@ app.post("/decks/:deckId/options", async (c) => {
   const maxRev = typeof body.max_review_cards === "number" ? body.max_review_cards : 100;
   const order = body.review_order === "sequential" ? "sequential" : "random";
   const excludedTags = typeof body.excluded_tags === "string" ? body.excluded_tags : "";
+  const excludeReversed = body.exclude_reversed === true || body.exclude_reversed === 1 ? 1 : 0;
 
   await db
     .prepare(
-      `INSERT INTO deck_options (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO deck_options (deck_id, user_id, max_new_cards, max_review_cards, review_order, excluded_tags, exclude_reversed)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(deck_id, user_id) DO UPDATE SET
          max_new_cards = excluded.max_new_cards,
          max_review_cards = excluded.max_review_cards,
          review_order = excluded.review_order,
-         excluded_tags = excluded.excluded_tags`
+         excluded_tags = excluded.excluded_tags,
+         exclude_reversed = excluded.exclude_reversed`
     )
-    .bind(deckId, userId, maxNew, maxRev, order, excludedTags)
+    .bind(deckId, userId, maxNew, maxRev, order, excludedTags, excludeReversed)
     .run();
 
   return c.json({ success: true });
@@ -829,13 +844,16 @@ app.get("/decks/:deckId/study", async (c) => {
 
     let options = await db
       .prepare(
-        "SELECT max_new_cards, max_review_cards, review_order, excluded_tags FROM deck_options WHERE deck_id = ? AND user_id = ?"
+        "SELECT max_new_cards, max_review_cards, review_order, excluded_tags, exclude_reversed FROM deck_options WHERE deck_id = ? AND user_id = ?"
       )
       .bind(deckId, userId)
-      .first<{ max_new_cards: number; max_review_cards: number; review_order: string; excluded_tags: string }>();
+      .first<{ max_new_cards: number; max_review_cards: number; review_order: string; excluded_tags: string; exclude_reversed: number }>();
     if (!options) {
-      options = { max_new_cards: 20, max_review_cards: 100, review_order: "random", excluded_tags: "" };
+      options = { max_new_cards: 20, max_review_cards: 100, review_order: "random", excluded_tags: "", exclude_reversed: 0 };
     }
+
+    // 反転カード除外オプション
+    const reversedFilterSql = options.exclude_reversed ? " AND c.is_reversed = 0" : "";
 
     const excludedTagList = options.excluded_tags
       ? options.excluded_tags.trim().split(/\s+/).filter(Boolean)
@@ -881,7 +899,7 @@ app.get("/decks/:deckId/study", async (c) => {
           `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
            JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
-           WHERE c.deck_id = ? AND cs.status = 'new'${tagFilterSql}
+           WHERE c.deck_id = ? AND cs.status = 'new'${tagFilterSql}${reversedFilterSql}
            ORDER BY c.id
            LIMIT ?`
         )
@@ -898,8 +916,8 @@ app.get("/decks/:deckId/study", async (c) => {
           `SELECT c.*, cs.ease_factor, cs.interval_days, cs.repetitions, cs.lapses, cs.status, cs.next_review_at
            FROM cards c
            JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
-           WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
-             AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)${tagFilterSql}
+            WHERE c.deck_id = ? AND cs.status IN ('learning', 'review')
+              AND (cs.next_review_at IS NULL OR cs.next_review_at <= ?)${tagFilterSql}${reversedFilterSql}
            ORDER BY cs.next_review_at
            LIMIT ?`
         )

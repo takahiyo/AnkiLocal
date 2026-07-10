@@ -238,10 +238,12 @@ function renderCardContent(card) {
 
   // Basic / Basic (and reversed card) / Basic (optional reversed card)
   // パーサーが既にfront/backを入れ替えて生成しているため、そのまま表示する
+  // reversed カードは meta に "(Reversed)" を付加して識別可能にする
+  const revLabel = card.is_reversed ? ' (Reversed)' : '';
   return {
     frontHtml: escapeHtml(card.front || ''),
     backHtml: escapeHtml(card.back || ''),
-    metaText: noteType,
+    metaText: `${noteType}${revLabel}`,
   };
 }
 

@@ -381,6 +381,15 @@
                             <option value="sequential">順次</option>
                         </select>
                     </div>
+                    <div class="form-group" style="margin-top: var(--spacing-md);">
+                        <label class="checkbox-label" style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; user-select: none;">
+                            <input type="checkbox" id="option-exclude-reversed" style="width: 18px; height: 18px; cursor: pointer;">
+                            <span style="color: var(--text-primary);">反転カードを除外する</span>
+                        </label>
+                        <p style="margin-top: 4px; font-size: var(--font-size-xs); color: var(--text-muted); line-height: 1.4;">
+                            有効にすると、表面に解答が表示される反転カード（Card 2）が出題対象から除外されます。
+                        </p>
+                    </div>
                 </div>
                 <div id="tags-tab-panel" class="tab-panel">
                     <div id="tag-checklist-loading" class="loading-spinner" style="padding: 1rem 0;">
