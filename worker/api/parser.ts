@@ -1,13 +1,14 @@
 /**
  * parser.ts - Ankiテキストファイルパーサー (TypeScript版)
  *
- * backend/parser.py からの移植。
  * Ankiのエクスポート形式（タブ区切りテキスト）を解析し、カードデータを抽出する。
- * Cloze（穴埋め）記法の自動展開や、Basic (optional reversed card) の表裏逆転カード自動生成に対応。
+ * ノートタイプ別カード生成ロジックは notes.ts に委譲する。
+ *
+ * 依存: api/notes.ts
+ * 参照元: index.ts (POST /api/import)
  */
 
-// --- Cloze記法の正規表現パターン ---
-const CLOZE_PATTERN = /\{\{c(\d+)::(.*?)(?:::(.*?))?\}\}/g;
+import { generateCards, NOTE_TYPES } from "./notes";
 
 // --- フィルタリング対象タグ ---
 const FILTER_TAGS = new Set(["要削除"]);
@@ -132,48 +133,51 @@ function splitTabWithQuotes(line: string, separator: string = "\t"): string[] {
 }
 
 /**
- * テキスト内のCloze番号のセットを返す。
+ * ノートタイプに応じて、Ankiのフィールド位置（0-based index 3〜）を
+ * notes.ts の FieldMap にマッピングする。
+ *
+ * Ankiテキストファイルのレイアウト:
+ *   フィールド0: guid
+ *   フィールド1: noteType
+ *   フィールド2: deckName
+ *   フィールド3+: ノートタイプ依存のデータフィールド
+ *   最終フィールド: tags
  */
-function countClozeNumbers(text: string): Set<number> {
-  const numbers = new Set<number>();
-  let match;
-  // グローバル正規表現のため、新しく初期化してループを回す
-  const regex = new RegExp(CLOZE_PATTERN);
-  while ((match = regex.exec(text)) !== null) {
-    numbers.add(parseInt(match[1], 10));
+function buildFieldMap(noteType: string, fields: string[]): Record<string, string> {
+  const safeGet = (idx: number): string => {
+    if (idx >= 0 && idx < fields.length) return fields[idx];
+    return "";
+  };
+
+  switch (noteType) {
+    case NOTE_TYPES.CLOZE:
+      return {
+        "Text": safeGet(3),
+        "Back Extra": safeGet(4),
+      };
+    case NOTE_TYPES.BASIC_OPTIONAL_REVERSED:
+      return {
+        "Front": safeGet(3),
+        "Back": safeGet(4),
+        "Add Reverse": safeGet(5),
+      };
+    case NOTE_TYPES.IMAGE_OCCLUSION:
+      return {
+        "Image": safeGet(3),
+        "Header": safeGet(4),
+        "Footer": safeGet(5),
+        "OcclusionData": safeGet(6),
+      };
+    // Basic, Basic (and reversed card), Basic (type in the answer) は同構造
+    case NOTE_TYPES.BASIC:
+    case NOTE_TYPES.BASIC_REVERSED:
+    case NOTE_TYPES.BASIC_TYPE_IN_ANSWER:
+    default:
+      return {
+        "Front": safeGet(3),
+        "Back": safeGet(4),
+      };
   }
-  return numbers;
-}
-
-/**
- * Cloze問題の表面を生成する。
- */
-function renderClozeFront(text: string, targetIndex: number): string {
-  return text.replace(new RegExp(CLOZE_PATTERN), (match, p1, p2, p3) => {
-    const clozeNum = parseInt(p1, 10);
-    const answerText = p2;
-    const hint = p3;
-    
-    if (clozeNum === targetIndex) {
-      return hint ? `[${hint}]` : "[...]";
-    }
-    return answerText;
-  });
-}
-
-/**
- * Cloze問題の裏面を生成する。
- */
-function renderClozeBack(text: string, targetIndex: number): string {
-  return text.replace(new RegExp(CLOZE_PATTERN), (match, p1, p2) => {
-    const clozeNum = parseInt(p1, 10);
-    const answerText = p2;
-    
-    if (clozeNum === targetIndex) {
-      return `<strong>${answerText}</strong>`;
-    }
-    return answerText;
-  });
 }
 
 /**
@@ -189,33 +193,34 @@ function hasFilterTags(tagsStr: string): boolean {
 
 /**
  * データ行をパースする。
+ * 戻り値: [guid, noteType, deckName, front, back, field5, tags]
+ *   field5: Add Reverse（optional reversed card）または Footer（Image Occlusion）
  */
 export function parseDataLine(
   line: string,
   header: ParsedHeader
-): [string, string, string, string, string, string] | null {
+): [string, string, string, string, string, string, string] | null {
   if (!line.trim()) {
     return null;
   }
 
   const fields = splitTabWithQuotes(line, header.separator);
 
-  const safeGet = (idx: number): string => {
-    const zeroBased = idx - 1;
-    if (zeroBased >= 0 && zeroBased < fields.length) {
-      return fields[zeroBased];
-    }
-    return "";
+  const safeGetCol = (col: number): string => {
+    const idx = col - 1;
+    return (idx >= 0 && idx < fields.length) ? fields[idx] : "";
   };
 
-  const guid = safeGet(header.guidColumn);
-  const noteType = safeGet(header.notetypeColumn);
-  const deckName = safeGet(header.deckColumn);
-  const tags = safeGet(header.tagsColumn);
+  const guid = safeGetCol(header.guidColumn);
+  const noteType = safeGetCol(header.notetypeColumn);
+  const deckName = safeGetCol(header.deckColumn);
+  const tags = safeGetCol(header.tagsColumn);
 
-  // フィールド4 と 5 を表・裏に使用（固定位置）
+  // データフィールドは固定位置（0-based index 3, 4, 5）
+  // Ankiエクスポート: guid, noteType, deck, dataField1, dataField2, dataField3, tags
   const front = fields.length > 3 ? fields[3] : "";
   const back = fields.length > 4 ? fields[4] : "";
+  const field5 = fields.length > 5 ? fields[5] : "";
 
   if (!guid) {
     return null;
@@ -225,11 +230,12 @@ export function parseDataLine(
     return null;
   }
 
-  return [guid, noteType, deckName, front, back, tags];
+  return [guid, noteType, deckName, front, back, field5, tags];
 }
 
 /**
  * ノートタイプに応じてカードを展開する。
+ * カード生成ロジックは notes.ts の generateCards() に委譲する。
  */
 export function expandCards(
   guid: string,
@@ -237,85 +243,26 @@ export function expandCards(
   deckName: string,
   front: string,
   back: string,
+  field5: string,
   tags: string
 ): ParsedCard[] {
-  const cards: ParsedCard[] = [];
+  // フィールド配列を構築: [guid, noteType, deckName, field3, field4, field5]
+  const fieldsArr = [guid, noteType, deckName, front, back, field5];
+  const fieldMap = buildFieldMap(noteType, fieldsArr);
 
-  if (noteType === "Cloze") {
-    const clozeNumbers = countClozeNumbers(front);
-    if (clozeNumbers.size === 0) {
-      cards.push({
-        guid,
-        note_type: noteType,
-        deck_name: deckName,
-        front,
-        back: back || front,
-        tags,
-        cloze_count: 0,
-        cloze_index: 0,
-        is_reversed: false,
-      });
-    } else {
-      const sortedNumbers = Array.from(clozeNumbers).sort((a, b) => a - b);
-      for (const clozeNum of sortedNumbers) {
-        const clozeFront = renderClozeFront(front, clozeNum);
-        const clozeBack = renderClozeBack(front, clozeNum);
-        cards.push({
-          guid,
-          note_type: noteType,
-          deck_name: deckName,
-          front: clozeFront,
-          back: clozeBack,
-          tags,
-          cloze_count: clozeNumbers.size,
-          cloze_index: clozeNum,
-          is_reversed: false,
-        });
-      }
-    }
-  } else if (noteType === "Basic (optional reversed card)") {
-    // 通常カード
-    cards.push({
-      guid,
-      note_type: noteType,
-      deck_name: deckName,
-      front,
-      back,
-      tags,
-      cloze_count: 0,
-      cloze_index: 0,
-      is_reversed: false,
-    });
-    // 逆カード (裏が存在する場合のみ)
-    if (back.trim()) {
-      cards.push({
-        guid,
-        note_type: noteType,
-        deck_name: deckName,
-        front: back,
-        back: front,
-        tags,
-        cloze_count: 0,
-        cloze_index: 0,
-        is_reversed: true,
-      });
-    }
-  } else {
-    // Basic およびその他
-    cards.push({
-      guid,
-      note_type: noteType,
-      deck_name: deckName,
-      front,
-      back,
-      tags,
-      cloze_count: 0,
-      cloze_index: 0,
-      is_reversed: false,
-    });
-  }
+  const renderedCards = generateCards(noteType, fieldMap);
 
-  return cards;
+  return renderedCards.map((rc) => ({
+    guid,
+    note_type: noteType,
+    deck_name: deckName,
+    front: rc.front,
+    back: rc.back,
+    tags,
+    cloze_count: rc.clozeCount,
+    cloze_index: rc.clozeIndex,
+    is_reversed: rc.isReversed,
+  }));
 }
 
 /**
@@ -335,8 +282,8 @@ export function parseAnkiFile(content: string): ParsedCard[] {
     if (parsed === null) {
       continue;
     }
-    const [guid, noteType, deckName, front, back, tags] = parsed;
-    const expanded = expandCards(guid, noteType, deckName, front, back, tags);
+    const [guid, noteType, deckName, front, back, field5, tags] = parsed;
+    const expanded = expandCards(guid, noteType, deckName, front, back, field5, tags);
     allCards.push(...expanded);
   }
 

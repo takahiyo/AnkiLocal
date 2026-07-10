@@ -2,8 +2,9 @@
  * modules/study.js - 学習画面（メイン機能）
  *
  * カードフリップアニメーション付きのフラッシュカード学習機能。
- * ノートタイプ別レンダリング（Basic, Basic reversed, Cloze）に対応。
- * 評価ボタン（Again/Hard/Good/Easy）でSRSレビューを送信する。
+ * 全6ノートタイプのレンダリングに対応:
+ *   Basic, Basic (and reversed card), Basic (optional reversed card),
+ *   Basic (type in the answer), Cloze, Image Occlusion
  *
  * 依存: constants/index.js, services/api.js, services/cloze.js, modules/router.js
  * 参照元: main.js から init() で起動
@@ -11,7 +12,6 @@
 
 import { STUDY_IDS, NOTE_TYPES } from '../constants/index.js';
 import { fetchStudyCards, submitReview, fetchDecks } from '../services/api.js';
-import { renderClozeQuestion, renderClozeAnswer } from '../services/cloze.js';
 import { goBack } from './router.js';
 
 /* === モジュール内部状態 === */
@@ -147,8 +147,27 @@ function showCard() {
 
   const showAnswerBtn = $(STUDY_IDS.SHOW_ANSWER_BTN);
   const ratingButtons = $(STUDY_IDS.RATING_BUTTONS);
-  if (showAnswerBtn) showAnswerBtn.classList.remove('hidden');
+
+  // Type in the Answer: 「答えを見る」ボタンは非表示（入力フィールドのEnterでフリップ）
+  const isTypeIn = card?.note_type === NOTE_TYPES.BASIC_TYPE_IN_ANSWER;
+  if (showAnswerBtn) {
+    if (isTypeIn) showAnswerBtn.classList.add('hidden');
+    else showAnswerBtn.classList.remove('hidden');
+  }
   if (ratingButtons) ratingButtons.classList.add('hidden');
+
+  // Type in the Answer: 入力フィールドにフォーカスを当て、Enterでフリップできるようにする
+  const typeInField = document.querySelector('.type-in-answer-field');
+  if (typeInField) {
+    typeInField.value = '';
+    setTimeout(() => typeInField.focus(), 100);
+    typeInField.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        flipCard();
+      }
+    };
+  }
 
   updateProgress();
 }
@@ -161,19 +180,64 @@ function showCard() {
 function renderCardContent(card) {
   const noteType = card.note_type || NOTE_TYPES.BASIC;
 
-  // Clozeタイプ
+  // Clozeタイプ（サーバー側で既にレンダリング済みのため直接表示）
   if (noteType === NOTE_TYPES.CLOZE) {
     const targetIndex = card.cloze_index || 1;
     return {
-      frontHtml: renderClozeQuestion(card.front, targetIndex),
-      backHtml: renderClozeAnswer(card.front, targetIndex),
+      frontHtml: escapeHtml(card.front || ''),
+      backHtml: card.back || '', // サーバー生成の<strong>タグ等を含むHTMLをそのまま使用
       metaText: `Cloze (c${targetIndex})`,
     };
   }
 
-  // Basic（デフォルト）
-  // ※パーサーが is_reversed=true のカードで既にfront/backを入れ替えて生成しているため、
-  //   フロントエンドではそのまま表示する
+  // Basic (type in the answer) - 表面に入力フォームを表示
+  if (noteType === NOTE_TYPES.BASIC_TYPE_IN_ANSWER) {
+    return {
+      frontHtml: `
+        ${escapeHtml(card.front || '')}
+        <div class="type-in-answer-input" style="margin-top: var(--spacing-lg);">
+          <input type="text" class="type-in-answer-field"
+                 placeholder="答えを入力..."
+                 autocomplete="off" autocorrect="off" spellcheck="false"
+                 style="width: 100%; max-width: 400px; padding: var(--spacing-md);
+                        font-size: var(--font-size-lg); border: 2px solid var(--border-glass);
+                        border-radius: var(--radius-md); background: var(--bg-glass);
+                        color: var(--text-primary); outline: none;">
+        </div>
+      `,
+      backHtml: `
+        ${escapeHtml(card.front || '')}
+        <hr id="answer">
+        <div class="type-in-answer-correct">${escapeHtml(card.back || '')}</div>
+      `,
+      metaText: 'Type in the Answer',
+    };
+  }
+
+  // Image Occlusion - front=画像URL, back=メタデータJSON
+  if (noteType === NOTE_TYPES.IMAGE_OCCLUSION) {
+    try {
+      const imageSrc = card.front || ''; // 画像URL（notes.ts で front に格納）
+      const meta = JSON.parse(card.back || '{}'); // メタデータ（back に格納）
+      const occlusions = JSON.parse(meta.occlusionData || '[]');
+      const activeMaskId = meta.activeMaskId;
+
+      return {
+        frontHtml: renderOcclusionSvg(imageSrc, occlusions, activeMaskId, true),
+        backHtml: renderOcclusionSvg(imageSrc, occlusions, activeMaskId, false),
+        metaText: `Image Occlusion (${activeMaskId || ''})`,
+      };
+    } catch {
+      return {
+        frontHtml: escapeHtml(card.front || ''),
+        backHtml: escapeHtml(card.back || ''),
+        metaText: 'Image Occlusion',
+      };
+    }
+  }
+
+  // Basic / Basic (and reversed card) / Basic (optional reversed card)
+  // パーサーが既にfront/backを入れ替えて生成しているため、そのまま表示する
   return {
     frontHtml: escapeHtml(card.front || ''),
     backHtml: escapeHtml(card.back || ''),
@@ -205,13 +269,129 @@ function escapeHtml(str) {
 }
 
 /**
+ * Image Occlusion 用のSVGマスクHTMLを生成する。
+ * @param {string} imageSrc - ベース画像のURL
+ * @param {Array} occlusions - マスクデータ配列
+ * @param {string} activeMaskId - アクティブなマスクID
+ * @param {boolean} isFront - 表面かどうか（表面はアクティブマスクを赤、非アクティブを黄で隠す）
+ * @returns {string} HTML文字列
+ */
+function renderOcclusionSvg(imageSrc, occlusions, activeMaskId, isFront) {
+  if (!imageSrc) return '<div class="text-muted">No image data</div>';
+
+  const firstMask = occlusions[0] || {};
+  const imgW = firstMask.originalWidth || firstMask.x + (firstMask.width || 0) + 100 || 800;
+  const imgH = firstMask.originalHeight || firstMask.y + (firstMask.height || 0) + 100 || 600;
+
+  const masksSvg = occlusions.map((mask) => {
+    const isActive = mask.id === activeMaskId;
+    if (isActive && !isFront) {
+      return `<rect x="${mask.x}" y="${mask.y}" width="${mask.width}" height="${mask.height}"
+                    fill="none" stroke="var(--color-success)" stroke-width="2"
+                    stroke-dasharray="4,2" rx="2" />`;
+    }
+    if (isActive && isFront) {
+      return `<rect x="${mask.x}" y="${mask.y}" width="${mask.width}" height="${mask.height}"
+                    fill="var(--color-danger)" opacity="0.85" rx="2" />`;
+    }
+    return `<rect x="${mask.x}" y="${mask.y}" width="${mask.width}" height="${mask.height}"
+                  fill="var(--color-warning)" opacity="0.7" rx="2" />`;
+  }).join('');
+
+  return `
+    <div class="occlusion-container" style="position: relative; max-width: 100%;">
+      <img src="${escapeAttr(imageSrc)}" alt="Occlusion image"
+           style="width: 100%; height: auto; display: block; border-radius: var(--radius-md);"
+           onerror="this.parentElement.innerHTML='<div class=\\'text-muted\\'>Image not found</div>'">
+      <svg viewBox="0 0 ${imgW} ${imgH}"
+           style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;">
+        ${masksSvg}
+      </svg>
+    </div>
+  `;
+}
+
+/**
+ * HTML属性エスケープ
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeAttr(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+/**
+ * Type in the Answer の入力テキストと正解の差分を視覚的に表示する。
+ * 簡易的な文字単位の差分ハイライト。
+ * @param {string} userInput - ユーザーの入力
+ * @param {string} correctAnswer - 正しい答え
+ * @returns {string} HTML文字列
+ */
+function renderTypeInDiff(userInput, correctAnswer) {
+  const container = document.createElement('div');
+  container.style.cssText = 'font-family: monospace; font-size: var(--font-size-lg); text-align: center;';
+
+  if (userInput === correctAnswer) {
+    container.innerHTML = `<span style="background: var(--color-success); color: white; padding: 2px 6px; border-radius: 3px;">${escapeHtml(correctAnswer)}</span> <span style="color: var(--color-success); margin-left: 8px;">&#10003; Correct!</span>`;
+    return container.outerHTML;
+  }
+
+  // 簡易文字差分（LCSなしのシンプル版）
+  const maxLen = Math.max(userInput.length, correctAnswer.length);
+  let result = '';
+  for (let i = 0; i < maxLen; i++) {
+    const u = userInput[i] || '';
+    const c = correctAnswer[i] || '';
+    if (u === c) {
+      result += `<span style="color: var(--color-success);">${escapeHtml(u)}</span>`;
+    } else {
+      if (u) result += `<span style="background: var(--color-danger); color: white; text-decoration: line-through; padding: 0 2px; border-radius: 2px;">${escapeHtml(u)}</span>`;
+      if (c) result += `<span style="background: var(--color-warning); color: var(--text-primary); padding: 0 2px; border-radius: 2px;">${escapeHtml(c)}</span>`;
+    }
+  }
+  container.innerHTML = `
+    <div style="margin-bottom: var(--spacing-sm);">
+      <span style="color: var(--text-secondary); font-size: var(--font-size-sm);">Your answer:</span><br>
+      <span>${escapeHtml(userInput) || '<em style="color: var(--text-muted);">(empty)</em>'}</span>
+    </div>
+    <div style="margin-bottom: var(--spacing-sm);">
+      <span style="color: var(--text-secondary); font-size: var(--font-size-sm);">Correct answer:</span><br>
+      <span>${escapeHtml(correctAnswer)}</span>
+    </div>
+    <div>
+      <span style="color: var(--text-secondary); font-size: var(--font-size-sm);">Difference:</span><br>
+      ${result}
+    </div>
+  `;
+  return container.outerHTML;
+}
+
+/**
  * カードをフリップして裏面を表示する。
  */
 function flipCard() {
   if (_isFlipped || _currentIndex >= _cards.length) return;
 
   _isFlipped = true;
-  console.log(`[Study] flipCard: index=${_currentIndex}, card_id=${_cards[_currentIndex]?.id}`);
+  const card = _cards[_currentIndex];
+  console.log(`[Study] flipCard: index=${_currentIndex}, card_id=${card?.id}`);
+
+  // Type in the Answer: 入力内容を取得して裏面に差分表示
+  if (card?.note_type === NOTE_TYPES.BASIC_TYPE_IN_ANSWER) {
+    const typeInField = document.querySelector('.type-in-answer-field');
+    const backText = $(STUDY_IDS.CARD_BACK_TEXT);
+    if (typeInField && backText) {
+      const userInput = typeInField.value.trim();
+      const correctAnswer = card.back || '';
+      backText.innerHTML = `
+        ${escapeHtml(card.front || '')}
+        <hr id="answer">
+        ${renderTypeInDiff(userInput, correctAnswer)}
+      `;
+    }
+  }
 
   const container = $(STUDY_IDS.CARD_CONTAINER);
   if (container) container.classList.add('flipped');
@@ -373,11 +553,15 @@ function bindEvents() {
     showAnswerBtn.addEventListener('click', flipCard);
   }
 
-  // カードクリックでもフリップ
+  // カードクリックでもフリップ（ただしType-in-the-Answerは入力フォームへのフォーカスと競合するため除外）
   const cardContainer = $(STUDY_IDS.CARD_CONTAINER);
   if (cardContainer) {
     cardContainer.addEventListener('click', () => {
-      if (!_isFlipped) flipCard();
+      if (!_isFlipped) {
+        const card = _cards[_currentIndex];
+        if (card?.note_type === NOTE_TYPES.BASIC_TYPE_IN_ANSWER) return;
+        flipCard();
+      }
     });
   }
 

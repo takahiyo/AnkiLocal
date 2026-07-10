@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS decks (
 );
 
 -- カードテーブル
+-- note_type は以下の6種類に対応:
+--   Basic, Basic (and reversed card), Basic (optional reversed card),
+--   Basic (type in the answer), Cloze, Image Occlusion
 CREATE TABLE IF NOT EXISTS cards (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     guid        TEXT    NOT NULL,

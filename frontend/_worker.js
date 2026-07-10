@@ -2071,8 +2071,189 @@ var Hono2 = class extends Hono {
   }
 };
 
+// worker/api/notes.ts
+var CLOZE_PATTERN = /\{\{c(\d+)::([^:}]+)(?:::(.*?[^\\]))?\}\}/g;
+var NOTE_TYPES = Object.freeze({
+  BASIC: "Basic",
+  BASIC_REVERSED: "Basic (and reversed card)",
+  BASIC_OPTIONAL_REVERSED: "Basic (optional reversed card)",
+  BASIC_TYPE_IN_ANSWER: "Basic (type in the answer)",
+  CLOZE: "Cloze",
+  IMAGE_OCCLUSION: "Image Occlusion"
+});
+function generateCards(noteType, fields) {
+  switch (noteType) {
+    case NOTE_TYPES.BASIC:
+      return generateBasicCards(fields);
+    case NOTE_TYPES.BASIC_REVERSED:
+      return generateBasicReversedCards(fields);
+    case NOTE_TYPES.BASIC_OPTIONAL_REVERSED:
+      return generateBasicOptionalReversedCards(fields);
+    case NOTE_TYPES.BASIC_TYPE_IN_ANSWER:
+      return generateBasicTypeInAnswerCards(fields);
+    case NOTE_TYPES.CLOZE:
+      return generateClozeCards(fields);
+    case NOTE_TYPES.IMAGE_OCCLUSION:
+      return generateImageOcclusionCards(fields);
+    default:
+      return generateBasicCards(fields);
+  }
+}
+function countClozeNumbers(text) {
+  const numbers = /* @__PURE__ */ new Set();
+  let match2;
+  const regex = new RegExp(CLOZE_PATTERN);
+  while ((match2 = regex.exec(text)) !== null) {
+    numbers.add(parseInt(match2[1], 10));
+  }
+  return numbers;
+}
+function generateBasicCards(fields) {
+  const front = (fields["Front"] || "").trim();
+  if (!front) return [];
+  const back = fields["Back"] || "";
+  return [
+    {
+      front,
+      back,
+      clozeIndex: 0,
+      clozeCount: 0,
+      isReversed: false,
+      templateName: "Card 1 (Front -> Back)"
+    }
+  ];
+}
+function generateBasicReversedCards(fields) {
+  const front = (fields["Front"] || "").trim();
+  const back = (fields["Back"] || "").trim();
+  const cards = [];
+  if (front) {
+    cards.push({
+      front,
+      back: fields["Back"] || "",
+      clozeIndex: 0,
+      clozeCount: 0,
+      isReversed: false,
+      templateName: "Card 1 (Front -> Back)"
+    });
+  }
+  if (back) {
+    cards.push({
+      front: back,
+      back: front,
+      clozeIndex: 0,
+      clozeCount: 0,
+      isReversed: true,
+      templateName: "Card 2 (Back -> Front)"
+    });
+  }
+  return cards;
+}
+function generateBasicOptionalReversedCards(fields) {
+  const front = (fields["Front"] || "").trim();
+  const back = (fields["Back"] || "").trim();
+  const addReverse = (fields["Add Reverse"] || "").trim();
+  const cards = [];
+  if (front) {
+    cards.push({
+      front,
+      back: fields["Back"] || "",
+      clozeIndex: 0,
+      clozeCount: 0,
+      isReversed: false,
+      templateName: "Card 1 (Front -> Back)"
+    });
+  }
+  if (addReverse && back) {
+    cards.push({
+      front: back,
+      back: front,
+      clozeIndex: 0,
+      clozeCount: 0,
+      isReversed: true,
+      templateName: "Card 2 (Back -> Front)"
+    });
+  }
+  return cards;
+}
+function generateBasicTypeInAnswerCards(fields) {
+  return generateBasicCards(fields);
+}
+function generateClozeCards(fields) {
+  const text = fields["Text"] || "";
+  const backExtra = fields["Back Extra"] || "";
+  const clozeNumbers = countClozeNumbers(text);
+  if (clozeNumbers.size === 0) {
+    if (!text.trim()) return [];
+    return [
+      {
+        front: text,
+        back: backExtra || text,
+        clozeIndex: 0,
+        clozeCount: 0,
+        isReversed: false,
+        templateName: "Cloze"
+      }
+    ];
+  }
+  const sortedNumbers = Array.from(clozeNumbers).sort((a, b) => a - b);
+  return sortedNumbers.map((clozeNum) => ({
+    front: renderClozeFront(text, clozeNum),
+    back: renderClozeBack(text, clozeNum) + (backExtra ? `
+<hr id="answer">
+${backExtra}` : ""),
+    clozeIndex: clozeNum,
+    clozeCount: clozeNumbers.size,
+    isReversed: false,
+    templateName: `Cloze (c${clozeNum})`
+  }));
+}
+function generateImageOcclusionCards(fields) {
+  try {
+    const imageUrl = fields["Image"] || "";
+    const occlusionData = fields["OcclusionData"] || "[]";
+    const masks = JSON.parse(occlusionData);
+    const cards = [];
+    masks.forEach((mask) => {
+      if (mask.is_card) {
+        cards.push({
+          front: imageUrl,
+          back: JSON.stringify({ occlusionData, activeMaskId: mask.id }),
+          clozeIndex: 0,
+          clozeCount: masks.filter((m) => m.is_card).length,
+          isReversed: false,
+          templateName: `Image Occlusion (${mask.id})`
+        });
+      }
+    });
+    return cards;
+  } catch {
+    return [];
+  }
+}
+function renderClozeFront(text, targetIndex) {
+  return text.replace(new RegExp(CLOZE_PATTERN), (match2, p1, p2, p3) => {
+    const clozeNum = parseInt(p1, 10);
+    const answerText = p2;
+    const hint = p3;
+    if (clozeNum === targetIndex) {
+      return hint ? `[${hint}]` : "[...]";
+    }
+    return answerText;
+  });
+}
+function renderClozeBack(text, targetIndex) {
+  return text.replace(new RegExp(CLOZE_PATTERN), (match2, p1, p2) => {
+    const clozeNum = parseInt(p1, 10);
+    const answerText = p2;
+    if (clozeNum === targetIndex) {
+      return `<strong>${answerText}</strong>`;
+    }
+    return answerText;
+  });
+}
+
 // worker/api/parser.ts
-var CLOZE_PATTERN = /\{\{c(\d+)::(.*?)(?:::(.*?))?\}\}/g;
 var FILTER_TAGS = /* @__PURE__ */ new Set(["\u8981\u524A\u9664"]);
 function parseHeaderLine(line) {
   if (!line.startsWith("#")) {
@@ -2152,35 +2333,40 @@ function splitTabWithQuotes(line, separator = "	") {
   fields.push(current.join(""));
   return fields;
 }
-function countClozeNumbers(text) {
-  const numbers = /* @__PURE__ */ new Set();
-  let match2;
-  const regex = new RegExp(CLOZE_PATTERN);
-  while ((match2 = regex.exec(text)) !== null) {
-    numbers.add(parseInt(match2[1], 10));
+function buildFieldMap(noteType, fields) {
+  const safeGet = (idx) => {
+    if (idx >= 0 && idx < fields.length) return fields[idx];
+    return "";
+  };
+  switch (noteType) {
+    case NOTE_TYPES.CLOZE:
+      return {
+        "Text": safeGet(3),
+        "Back Extra": safeGet(4)
+      };
+    case NOTE_TYPES.BASIC_OPTIONAL_REVERSED:
+      return {
+        "Front": safeGet(3),
+        "Back": safeGet(4),
+        "Add Reverse": safeGet(5)
+      };
+    case NOTE_TYPES.IMAGE_OCCLUSION:
+      return {
+        "Image": safeGet(3),
+        "Header": safeGet(4),
+        "Footer": safeGet(5),
+        "OcclusionData": safeGet(6)
+      };
+    // Basic, Basic (and reversed card), Basic (type in the answer) は同構造
+    case NOTE_TYPES.BASIC:
+    case NOTE_TYPES.BASIC_REVERSED:
+    case NOTE_TYPES.BASIC_TYPE_IN_ANSWER:
+    default:
+      return {
+        "Front": safeGet(3),
+        "Back": safeGet(4)
+      };
   }
-  return numbers;
-}
-function renderClozeFront(text, targetIndex) {
-  return text.replace(new RegExp(CLOZE_PATTERN), (match2, p1, p2, p3) => {
-    const clozeNum = parseInt(p1, 10);
-    const answerText = p2;
-    const hint = p3;
-    if (clozeNum === targetIndex) {
-      return hint ? `[${hint}]` : "[...]";
-    }
-    return answerText;
-  });
-}
-function renderClozeBack(text, targetIndex) {
-  return text.replace(new RegExp(CLOZE_PATTERN), (match2, p1, p2) => {
-    const clozeNum = parseInt(p1, 10);
-    const answerText = p2;
-    if (clozeNum === targetIndex) {
-      return `<strong>${answerText}</strong>`;
-    }
-    return answerText;
-  });
 }
 function hasFilterTags(tagsStr) {
   if (!tagsStr.trim()) {
@@ -2194,100 +2380,40 @@ function parseDataLine(line, header) {
     return null;
   }
   const fields = splitTabWithQuotes(line, header.separator);
-  const safeGet = (idx) => {
-    const zeroBased = idx - 1;
-    if (zeroBased >= 0 && zeroBased < fields.length) {
-      return fields[zeroBased];
-    }
-    return "";
+  const safeGetCol = (col) => {
+    const idx = col - 1;
+    return idx >= 0 && idx < fields.length ? fields[idx] : "";
   };
-  const guid = safeGet(header.guidColumn);
-  const noteType = safeGet(header.notetypeColumn);
-  const deckName = safeGet(header.deckColumn);
-  const tags = safeGet(header.tagsColumn);
+  const guid = safeGetCol(header.guidColumn);
+  const noteType = safeGetCol(header.notetypeColumn);
+  const deckName = safeGetCol(header.deckColumn);
+  const tags = safeGetCol(header.tagsColumn);
   const front = fields.length > 3 ? fields[3] : "";
   const back = fields.length > 4 ? fields[4] : "";
+  const field5 = fields.length > 5 ? fields[5] : "";
   if (!guid) {
     return null;
   }
   if (hasFilterTags(tags)) {
     return null;
   }
-  return [guid, noteType, deckName, front, back, tags];
+  return [guid, noteType, deckName, front, back, field5, tags];
 }
-function expandCards(guid, noteType, deckName, front, back, tags) {
-  const cards = [];
-  if (noteType === "Cloze") {
-    const clozeNumbers = countClozeNumbers(front);
-    if (clozeNumbers.size === 0) {
-      cards.push({
-        guid,
-        note_type: noteType,
-        deck_name: deckName,
-        front,
-        back: back || front,
-        tags,
-        cloze_count: 0,
-        cloze_index: 0,
-        is_reversed: false
-      });
-    } else {
-      const sortedNumbers = Array.from(clozeNumbers).sort((a, b) => a - b);
-      for (const clozeNum of sortedNumbers) {
-        const clozeFront = renderClozeFront(front, clozeNum);
-        const clozeBack = renderClozeBack(front, clozeNum);
-        cards.push({
-          guid,
-          note_type: noteType,
-          deck_name: deckName,
-          front: clozeFront,
-          back: clozeBack,
-          tags,
-          cloze_count: clozeNumbers.size,
-          cloze_index: clozeNum,
-          is_reversed: false
-        });
-      }
-    }
-  } else if (noteType === "Basic (optional reversed card)") {
-    cards.push({
-      guid,
-      note_type: noteType,
-      deck_name: deckName,
-      front,
-      back,
-      tags,
-      cloze_count: 0,
-      cloze_index: 0,
-      is_reversed: false
-    });
-    if (back.trim()) {
-      cards.push({
-        guid,
-        note_type: noteType,
-        deck_name: deckName,
-        front: back,
-        back: front,
-        tags,
-        cloze_count: 0,
-        cloze_index: 0,
-        is_reversed: true
-      });
-    }
-  } else {
-    cards.push({
-      guid,
-      note_type: noteType,
-      deck_name: deckName,
-      front,
-      back,
-      tags,
-      cloze_count: 0,
-      cloze_index: 0,
-      is_reversed: false
-    });
-  }
-  return cards;
+function expandCards(guid, noteType, deckName, front, back, field5, tags) {
+  const fieldsArr = [guid, noteType, deckName, front, back, field5];
+  const fieldMap = buildFieldMap(noteType, fieldsArr);
+  const renderedCards = generateCards(noteType, fieldMap);
+  return renderedCards.map((rc) => ({
+    guid,
+    note_type: noteType,
+    deck_name: deckName,
+    front: rc.front,
+    back: rc.back,
+    tags,
+    cloze_count: rc.clozeCount,
+    cloze_index: rc.clozeIndex,
+    is_reversed: rc.isReversed
+  }));
 }
 function parseAnkiFile(content) {
   const lines = content.split(/\r?\n/);
@@ -2301,8 +2427,8 @@ function parseAnkiFile(content) {
     if (parsed === null) {
       continue;
     }
-    const [guid, noteType, deckName, front, back, tags] = parsed;
-    const expanded = expandCards(guid, noteType, deckName, front, back, tags);
+    const [guid, noteType, deckName, front, back, field5, tags] = parsed;
+    const expanded = expandCards(guid, noteType, deckName, front, back, field5, tags);
     allCards.push(...expanded);
   }
   return allCards;
@@ -3234,7 +3360,7 @@ app.notFound(async (c) => {
     const html = await response.text();
     const injected = html.replace(
       "</head>",
-      `<script>window.__ANKI_TOKEN__ = "";</script></head>`
+      `<script>window.__ANKI_TOKEN__ = "";<\/script></head>`
     );
     return new Response(injected, {
       status: response.status,

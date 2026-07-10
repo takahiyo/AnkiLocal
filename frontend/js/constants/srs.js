@@ -40,11 +40,14 @@ export const RATING_BUTTON_IDS = Object.freeze({
   [RATING_VALUES.EASY]: 'study-btn-easy',
 });
 
-/** ノートタイプ名 */
+/** ノートタイプ名（SSOT: worker/api/notes.ts の NOTE_TYPES と一致させること） */
 export const NOTE_TYPES = Object.freeze({
   BASIC: 'Basic',
   BASIC_REVERSED: 'Basic (and reversed card)',
+  BASIC_OPTIONAL_REVERSED: 'Basic (optional reversed card)',
+  BASIC_TYPE_IN_ANSWER: 'Basic (type in the answer)',
   CLOZE: 'Cloze',
+  IMAGE_OCCLUSION: 'Image Occlusion',
 });
 
 /** アプリバージョン（SSOT: バージョン管理はここで一元管理） */
