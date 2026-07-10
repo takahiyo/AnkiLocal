@@ -237,6 +237,25 @@ async function runMigrations(db: D1Database) {
     console.error("[Migration] deck_options.exclude_reversed migration error:", e);
   }
 
+  // 「スキル把握」デッキの反転カード除外をデフォルトONに設定
+  try {
+    const skillDeck = await db.prepare("SELECT id FROM decks WHERE name = 'スキル把握'").first<{ id: number }>();
+    if (skillDeck) {
+      // 既存ユーザー全員分の deck_options 行がない場合は作成
+      await db.prepare(`
+        INSERT OR IGNORE INTO deck_options (deck_id, user_id)
+        SELECT ?, id FROM users
+      `).bind(skillDeck.id).run();
+      // exclude_reversed を 1 に設定
+      await db.prepare(`
+        UPDATE deck_options SET exclude_reversed = 1 WHERE deck_id = ?
+      `).bind(skillDeck.id).run();
+      console.log("[Migration] スキル把握 deck exclude_reversed set to 1");
+    }
+  } catch (e) {
+    console.error("[Migration] スキル把握 exclude_reversed setting error:", e);
+  }
+
   // 管理者アカウントのシード（id=1）
   try {
     const adminHash = await sha256("SukilHaakuAdmin116");

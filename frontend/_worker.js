@@ -2673,6 +2673,21 @@ async function runMigrations(db) {
     console.error("[Migration] deck_options.exclude_reversed migration error:", e);
   }
   try {
+    const skillDeck = await db.prepare("SELECT id FROM decks WHERE name = '\u30B9\u30AD\u30EB\u628A\u63E1'").first();
+    if (skillDeck) {
+      await db.prepare(`
+        INSERT OR IGNORE INTO deck_options (deck_id, user_id)
+        SELECT ?, id FROM users
+      `).bind(skillDeck.id).run();
+      await db.prepare(`
+        UPDATE deck_options SET exclude_reversed = 1 WHERE deck_id = ?
+      `).bind(skillDeck.id).run();
+      console.log("[Migration] \u30B9\u30AD\u30EB\u628A\u63E1 deck exclude_reversed set to 1");
+    }
+  } catch (e) {
+    console.error("[Migration] \u30B9\u30AD\u30EB\u628A\u63E1 exclude_reversed setting error:", e);
+  }
+  try {
     const adminHash = await sha256("SukilHaakuAdmin116");
     await db.prepare(`
       INSERT OR IGNORE INTO users (id, username, password_hash, is_admin)
