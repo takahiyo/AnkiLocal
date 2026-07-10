@@ -372,7 +372,7 @@ function renderClozeBack(text: string, targetIndex: number): string {
     const answerText = p2;
 
     if (clozeNum === targetIndex) {
-      return `<strong>${answerText}</strong>`;
+      return `<strong style="color: #1976D2;">${answerText}</strong>`;
     }
     return answerText;
   });
