@@ -81,6 +81,24 @@
   background: rgba(124, 58, 237, 0.1);
 }
 
+.nav-hamburger {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: var(--spacing-sm);
+  margin-left: auto;
+  line-height: 1;
+  border-radius: var(--border-radius-md);
+  transition: background var(--transition-fast);
+}
+
+.nav-hamburger:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 /* =============================================
    カード（ガラスモーフィズム）
    ============================================= */
@@ -919,14 +937,6 @@
     grid-template-columns: 1fr;
   }
 
-  .navbar {
-    padding: 0 var(--spacing-md);
-  }
-
-  .nav-link span {
-    display: none;
-  }
-
   .container {
     padding: 0 var(--spacing-md);
   }
@@ -941,6 +951,46 @@
     left: var(--spacing-md);
     right: var(--spacing-md);
     bottom: var(--spacing-md);
+  }
+}
+
+/* 狭小画面: ナビをハンバーガーメニューに折りたたみ */
+@media (max-width: 680px) {
+  .nav-hamburger {
+    display: block;
+  }
+
+  .navbar-nav {
+    display: none;
+    position: absolute;
+    top: var(--navbar-height);
+    right: var(--spacing-sm);
+    flex-direction: column;
+    background: rgba(15, 15, 35, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--border-radius-md);
+    padding: var(--spacing-xs) 0;
+    min-width: 180px;
+    box-shadow: var(--shadow-card);
+    z-index: var(--z-dropdown);
+  }
+
+  .navbar-nav.open {
+    display: flex;
+  }
+
+  .navbar-nav .nav-link {
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: 0;
+    font-size: var(--font-size-sm);
+    white-space: nowrap;
+    justify-content: flex-start;
+  }
+
+  .navbar-nav .nav-link:hover {
+    background: rgba(255, 255, 255, 0.05);
   }
 }
 

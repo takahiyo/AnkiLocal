@@ -292,6 +292,27 @@ function setupToast() {
  * ナビゲーションバーのクリックイベントハンドラを設定
  */
 function setupNavigation() {
+    const hamburger = document.getElementById('nav-hamburger');
+    const navMenu = document.getElementById('navbar-nav');
+
+    if (hamburger && navMenu) {
+        hamburger.addEventListener('click', () => {
+            navMenu.classList.toggle('open');
+        });
+
+        navMenu.querySelectorAll('.nav-link').forEach(link => {
+            link.addEventListener('click', () => {
+                navMenu.classList.remove('open');
+            });
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!hamburger.contains(e.target) && !navMenu.contains(e.target)) {
+                navMenu.classList.remove('open');
+            }
+        });
+    }
+
     const navDecks = document.getElementById(NAV_IDS.LINK_DECKS);
     const navStats = document.getElementById(NAV_IDS.LINK_STATS);
     const navImport = document.getElementById(NAV_IDS.LINK_IMPORT);
