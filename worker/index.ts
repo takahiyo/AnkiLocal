@@ -630,6 +630,7 @@ app.get("/decks", async (c) => {
 
 app.post("/import", async (c) => {
   const db = c.env.DB;
+  const userId = getUserId(c);
   try {
     const formData = await c.req.raw.formData();
     const file = formData.get("file") as File;
@@ -707,7 +708,7 @@ app.post("/import", async (c) => {
       );
     }
 
-    insertStmts.push(db.prepare("INSERT OR IGNORE INTO card_states (card_id, user_id) SELECT id, 1 FROM cards"));
+    insertStmts.push(db.prepare(`INSERT OR IGNORE INTO card_states (card_id, user_id) SELECT id, ? FROM cards`).bind(userId));
 
     const batchResults = await db.batch(insertStmts);
     for (let r = 0; r < batchResults.length - 1; r++) {

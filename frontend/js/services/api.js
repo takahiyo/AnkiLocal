@@ -65,6 +65,17 @@ function buildUrl(endpoint) {
  * @throws {Error} HTTPエラーの詳細を含むErrorオブジェクト
  */
 async function handleErrorResponse(response) {
+  // 401 の場合は認証切れとしてログイン画面へリダイレクト
+  if (response.status === 401) {
+    localStorage.removeItem('anki_local_token');
+    localStorage.removeItem('anki_local_is_admin');
+    _token = '';
+    if (!window.location.hash.startsWith('#/login')) {
+      window.location.hash = '#/login';
+    }
+    throw new Error('認証が切れました。再度ログインしてください。');
+  }
+
   let errorMessage = `HTTP ${response.status}`;
   try {
     const text = await response.text();
