@@ -920,7 +920,7 @@ app.get("/decks/:deckId/study", async (c) => {
            FROM cards c
            JOIN card_states cs ON c.id = cs.card_id AND cs.user_id = ?
            WHERE c.deck_id = ? AND cs.status = 'new'${tagFilterSql}${reversedFilterSql}
-           ORDER BY c.id
+           ORDER BY RANDOM()
            LIMIT ?`
         )
         .bind(userId, deckId, ...tagFilterParams, newBatchSize)
