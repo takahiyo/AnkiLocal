@@ -21,6 +21,8 @@ let _isFlipped = false;    // フリップ状態
 let _isProcessing = false; // レビュー送信中フラグ（二重送信防止）
 let _currentDeckId = null; // 現在のデッキID
 let _animTimeoutId = null; // next-card-anim 解除用タイマーID
+let _reviewsToday = 0;     // 本日の累積回答数（前回セッション含む）
+let _dailyLimit = 0;       // 1日の出題上限（max_new_cards + max_review_cards）
 
 /**
  * トースト通知（main.jsのグローバル関数経由）
@@ -51,6 +53,8 @@ export async function startStudySession(deckId) {
   _isFlipped = false;
   _isProcessing = false;
   _cards = [];
+  _reviewsToday = 0;
+  _dailyLimit = 0;
   if (_animTimeoutId !== null) {
     clearTimeout(_animTimeoutId);
     _animTimeoutId = null;
@@ -63,8 +67,11 @@ export async function startStudySession(deckId) {
   if (completeSection) completeSection.classList.add('hidden');
 
   try {
-    _cards = await fetchStudyCards(deckId);
-    console.log(`[Study] Loaded ${_cards.length} cards, first card_id=${_cards[0]?.id}`);
+    const data = await fetchStudyCards(deckId);
+    _cards = data.cards || data;
+    _reviewsToday = data.reviews_today || 0;
+    _dailyLimit = data.daily_limit || _cards.length;
+    console.log(`[Study] Loaded ${_cards.length} cards, reviews_today=${_reviewsToday}, daily_limit=${_dailyLimit}, first card_id=${_cards[0]?.id}`);
 
     // デッキ名を取得して表示
     try {
@@ -465,9 +472,9 @@ async function handleRating(rating) {
  * 進捗バーと進捗テキストを更新する。
  */
 function updateProgress() {
-  const total = _cards.length;
-  const current = _currentIndex + 1;
-  const percent = total > 0 ? Math.round((_currentIndex / total) * 100) : 0;
+  const total = _dailyLimit || _cards.length;
+  const current = _reviewsToday + _currentIndex + 1;
+  const percent = total > 0 ? Math.min(Math.round(((_reviewsToday + _currentIndex) / total) * 100), 100) : 0;
 
   const progressText = $(STUDY_IDS.PROGRESS_TEXT);
   const progressBar = $(STUDY_IDS.PROGRESS_BAR);

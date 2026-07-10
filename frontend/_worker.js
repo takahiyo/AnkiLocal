@@ -3196,25 +3196,38 @@ app.get("/decks/:deckId/study", async (c) => {
         [cards[i], cards[j]] = [cards[j], cards[i]];
       }
     }
+    const todayStart = /* @__PURE__ */ new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayResult = await db.prepare(
+      `SELECT COUNT(*) as cnt FROM review_logs rl
+         JOIN cards c ON rl.card_id = c.id
+         WHERE c.deck_id = ? AND rl.user_id = ? AND rl.reviewed_at >= ?`
+    ).bind(deckId, userId, todayStart.toISOString()).first();
+    const reviewsToday = todayResult?.cnt || 0;
+    const dailyLimit = (options.max_new_cards || 0) + (options.max_review_cards || 0);
     return c.json(
-      cards.map((row) => ({
-        id: row.id,
-        guid: row.guid,
-        deck_id: row.deck_id,
-        note_type: row.note_type,
-        front: row.front,
-        back: row.back,
-        tags: row.tags,
-        cloze_count: row.cloze_count,
-        cloze_index: row.cloze_index,
-        is_reversed: !!row.is_reversed,
-        ease_factor: row.ease_factor,
-        interval_days: row.interval_days,
-        repetitions: row.repetitions,
-        lapses: row.lapses,
-        status: row.status,
-        next_review_at: row.next_review_at
-      })),
+      {
+        cards: cards.map((row) => ({
+          id: row.id,
+          guid: row.guid,
+          deck_id: row.deck_id,
+          note_type: row.note_type,
+          front: row.front,
+          back: row.back,
+          tags: row.tags,
+          cloze_count: row.cloze_count,
+          cloze_index: row.cloze_index,
+          is_reversed: !!row.is_reversed,
+          ease_factor: row.ease_factor,
+          interval_days: row.interval_days,
+          repetitions: row.repetitions,
+          lapses: row.lapses,
+          status: row.status,
+          next_review_at: row.next_review_at
+        })),
+        reviews_today: reviewsToday,
+        daily_limit: dailyLimit
+      },
       200,
       { "Cache-Control": "no-store, no-cache, must-revalidate" }
     );
