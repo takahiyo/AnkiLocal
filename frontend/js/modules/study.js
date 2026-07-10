@@ -198,7 +198,7 @@ function renderCardContent(card) {
   if (noteType === NOTE_TYPES.CLOZE) {
     const targetIndex = card.cloze_index || 1;
     return {
-      frontHtml: escapeHtml(card.front || ''),
+      frontHtml: card.front || '', // サーバー生成の<span>タグを含むHTMLをそのまま使用
       backHtml: card.back || '', // サーバー生成の<strong>タグ等を含むHTMLをそのまま使用
       metaText: `Cloze (c${targetIndex})`,
     };
@@ -208,7 +208,7 @@ function renderCardContent(card) {
   if (noteType === NOTE_TYPES.BASIC_TYPE_IN_ANSWER) {
     return {
       frontHtml: `
-        ${escapeHtml(card.front || '')}
+        ${htmlLineBreaks(card.front || '')}
         <div class="type-in-answer-input" style="margin-top: var(--spacing-lg);">
           <input type="text" class="type-in-answer-field"
                  placeholder="答えを入力..."
@@ -220,9 +220,9 @@ function renderCardContent(card) {
         </div>
       `,
       backHtml: `
-        ${escapeHtml(card.front || '')}
+        ${htmlLineBreaks(card.front || '')}
         <hr id="answer">
-        <div class="type-in-answer-correct">${escapeHtml(card.back || '')}</div>
+        <div class="type-in-answer-correct">${htmlLineBreaks(card.back || '')}</div>
       `,
       metaText: 'Type in the Answer',
     };
@@ -255,8 +255,8 @@ function renderCardContent(card) {
   // reversed カードは meta に "(Reversed)" を付加して識別可能にする
   const revLabel = card.is_reversed ? ' (Reversed)' : '';
   return {
-    frontHtml: escapeHtml(card.front || ''),
-    backHtml: escapeHtml(card.back || ''),
+    frontHtml: htmlLineBreaks(card.front || ''),
+    backHtml: htmlLineBreaks(card.back || ''),
     metaText: `${noteType}${revLabel}`,
   };
 }
@@ -282,6 +282,16 @@ function escapeHtml(str) {
   escaped = escaped.replace(new RegExp(brPlaceholder, 'g'), '<br>');
 
   return escaped;
+}
+
+/**
+ * 改行を<br>に変換しつつHTMLはエスケープしない（カード本文用）。
+ * 既存の<br>タグはそのまま保持、\nは<br>に変換する。
+ * @param {string} str
+ * @returns {string}
+ */
+function htmlLineBreaks(str) {
+  return str.replace(/<br\s*\/?>/gi, '<br>').replace(/\n/g, '<br>');
 }
 
 /**

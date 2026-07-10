@@ -352,7 +352,8 @@ function renderClozeFront(text: string, targetIndex: number): string {
     const hint = p3;
 
     if (clozeNum === targetIndex) {
-      return hint ? `[${hint}]` : "[...]";
+      const displayText = hint ? hint : "[...]";
+      return `<span class="cloze-placeholder">${displayText}</span>`;
     }
     return answerText;
   });

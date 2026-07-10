@@ -2237,7 +2237,8 @@ function renderClozeFront(text, targetIndex) {
     const answerText = p2;
     const hint = p3;
     if (clozeNum === targetIndex) {
-      return hint ? `[${hint}]` : "[...]";
+      const displayText = hint ? hint : "[...]";
+      return `<span class="cloze-placeholder">${displayText}</span>`;
     }
     return answerText;
   });
