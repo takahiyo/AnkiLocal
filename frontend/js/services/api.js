@@ -222,7 +222,7 @@ export const fetchMe = () => apiGet(API.ME);
 export const fetchDecks = () => apiGet(API.DECKS);
 
 /** 指定デッキの学習カードを取得 */
-export const fetchStudyCards = (deckId) => apiGet(API.STUDY(deckId));
+export const fetchStudyCards = (deckId) => apiGet(`${API.STUDY(deckId)}?_t=${Date.now()}`);
 
 /** カードレビューを送信 */
 export const submitReview = (cardId, rating) => apiPost(API.REVIEW(cardId), { rating });

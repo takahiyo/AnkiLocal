@@ -3214,7 +3214,9 @@ app.get("/decks/:deckId/study", async (c) => {
         lapses: row.lapses,
         status: row.status,
         next_review_at: row.next_review_at
-      }))
+      })),
+      200,
+      { "Cache-Control": "no-store, no-cache, must-revalidate" }
     );
   } catch (err) {
     return c.json({ error: `\u5B66\u7FD2\u30AB\u30FC\u30C9\u53D6\u5F97\u30A8\u30E9\u30FC: ${err.message}` }, 500);
@@ -3389,7 +3391,7 @@ app.notFound(async (c) => {
     const html = await response.text();
     const injected = html.replace(
       "</head>",
-      `<script>window.__ANKI_TOKEN__ = "";<\/script></head>`
+      `<script>window.__ANKI_TOKEN__ = "";</script></head>`
     );
     return new Response(injected, {
       status: response.status,

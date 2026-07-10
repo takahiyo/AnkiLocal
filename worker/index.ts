@@ -970,7 +970,9 @@ app.get("/decks/:deckId/study", async (c) => {
         lapses: row.lapses,
         status: row.status,
         next_review_at: row.next_review_at,
-      }))
+      })),
+      200,
+      { "Cache-Control": "no-store, no-cache, must-revalidate" }
     );
   } catch (err: any) {
     return c.json({ error: `学習カード取得エラー: ${err.message}` }, 500);
