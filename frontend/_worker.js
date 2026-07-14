@@ -2963,12 +2963,77 @@ app.get("/decks", async (c) => {
     return c.json({ error: `\u30C7\u30C3\u30AD\u4E00\u89A7\u53D6\u5F97\u30A8\u30E9\u30FC: ${err.message}` }, 500);
   }
 });
+app.post("/import/preview", async (c) => {
+  const db = c.env.DB;
+  try {
+    const formData = await c.req.raw.formData();
+    const file = formData.get("file");
+    if (!file) return c.json({ error: "\u30D5\u30A1\u30A4\u30EB\u304C\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u3055\u308C\u3066\u3044\u307E\u305B\u3093" }, 400);
+    const raw2 = await file.arrayBuffer();
+    const decoder = new TextDecoder("utf-8");
+    const content = decoder.decode(raw2);
+    const parsedCards = parseAnkiFile(content);
+    if (parsedCards.length === 0) {
+      return c.json({ success: false, message: "\u30AB\u30FC\u30C9\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30D5\u30A1\u30A4\u30EB\u5F62\u5F0F\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002" });
+    }
+    const existingKeys = /* @__PURE__ */ new Set();
+    const allGuids = Array.from(new Set(parsedCards.map((c2) => c2.guid)));
+    const GUID_BATCH = 100;
+    for (let i = 0; i < allGuids.length; i += GUID_BATCH) {
+      const chunk = allGuids.slice(i, i + GUID_BATCH);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = await db.prepare(`SELECT guid, cloze_index, is_reversed FROM cards WHERE guid IN (${placeholders})`).bind(...chunk).all();
+      for (const row of rows.results) {
+        existingKeys.add(`${row.guid}:${row.cloze_index}:${row.is_reversed}`);
+      }
+    }
+    const newCards = [];
+    const existingCards = [];
+    for (const card of parsedCards) {
+      const key = `${card.guid}:${card.cloze_index}:${card.is_reversed ? 1 : 0}`;
+      if (existingKeys.has(key)) {
+        existingCards.push(card);
+      } else {
+        newCards.push(card);
+      }
+    }
+    const uniqueDeckNames = Array.from(new Set(parsedCards.map((c2) => c2.deck_name)));
+    return c.json({
+      success: true,
+      summary: {
+        total: parsedCards.length,
+        new_count: newCards.length,
+        existing_count: existingCards.length
+      },
+      cards: parsedCards.map((card) => {
+        const key = `${card.guid}:${card.cloze_index}:${card.is_reversed ? 1 : 0}`;
+        return {
+          guid: card.guid,
+          note_type: card.note_type,
+          deck_name: card.deck_name,
+          front: card.front,
+          back: card.back,
+          tags: card.tags,
+          cloze_count: card.cloze_count,
+          cloze_index: card.cloze_index,
+          is_reversed: card.is_reversed,
+          is_new: !existingKeys.has(key)
+        };
+      }),
+      decks: uniqueDeckNames
+    });
+  } catch (err) {
+    console.error("Preview error:", err.stack || err);
+    return c.json({ error: `\u30D7\u30EC\u30D3\u30E5\u30FC\u30A8\u30E9\u30FC: ${err.message}` }, 500);
+  }
+});
 app.post("/import", async (c) => {
   const db = c.env.DB;
   const userId = getUserId(c);
   try {
     const formData = await c.req.raw.formData();
     const file = formData.get("file");
+    const mode = formData.get("mode") || "skip";
     if (!file) {
       return c.json({ error: "\u30D5\u30A1\u30A4\u30EB\u304C\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u3055\u308C\u3066\u3044\u307E\u305B\u3093" }, 400);
     }
@@ -2977,10 +3042,7 @@ app.post("/import", async (c) => {
     const content = decoder.decode(raw2);
     const parsedCards = parseAnkiFile(content);
     if (parsedCards.length === 0) {
-      return c.json({
-        success: false,
-        message: "\u30AB\u30FC\u30C9\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30D5\u30A1\u30A4\u30EB\u5F62\u5F0F\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002"
-      });
+      return c.json({ success: false, message: "\u30AB\u30FC\u30C9\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u30D5\u30A1\u30A4\u30EB\u5F62\u5F0F\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002" });
     }
     const deckCache = {};
     const decksCreated = [];
@@ -3003,38 +3065,85 @@ app.post("/import", async (c) => {
       }
     }
     let cardsCreated = 0;
+    let cardsSkipped = 0;
+    let cardsUpdated = 0;
     const BATCH_SIZE = 10;
-    const insertStmts = [];
-    for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
-      const chunk = parsedCards.slice(i, i + BATCH_SIZE);
-      const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-      const params = [];
-      for (const card of chunk) {
-        uniqueNotes.add(card.guid);
-        params.push(
-          card.guid,
-          deckCache[card.deck_name],
-          card.note_type,
-          card.front,
-          card.back,
-          card.tags,
-          card.cloze_count,
-          card.cloze_index,
-          card.is_reversed ? 1 : 0
+    const stmts = [];
+    if (mode === "update") {
+      for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
+        const chunk = parsedCards.slice(i, i + BATCH_SIZE);
+        for (const card of chunk) {
+          uniqueNotes.add(card.guid);
+          stmts.push(
+            db.prepare(`UPDATE cards SET deck_id = ?, note_type = ?, front = ?, back = ?, tags = ?, cloze_count = ? WHERE guid = ? AND cloze_index = ? AND is_reversed = ?`).bind(
+              deckCache[card.deck_name],
+              card.note_type,
+              card.front,
+              card.back,
+              card.tags,
+              card.cloze_count,
+              card.guid,
+              card.cloze_index,
+              card.is_reversed ? 1 : 0
+            )
+          );
+          stmts.push(
+            db.prepare(`INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+              card.guid,
+              deckCache[card.deck_name],
+              card.note_type,
+              card.front,
+              card.back,
+              card.tags,
+              card.cloze_count,
+              card.cloze_index,
+              card.is_reversed ? 1 : 0
+            )
+          );
+        }
+      }
+    } else {
+      for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
+        const chunk = parsedCards.slice(i, i + BATCH_SIZE);
+        const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+        const params = [];
+        for (const card of chunk) {
+          uniqueNotes.add(card.guid);
+          params.push(
+            card.guid,
+            deckCache[card.deck_name],
+            card.note_type,
+            card.front,
+            card.back,
+            card.tags,
+            card.cloze_count,
+            card.cloze_index,
+            card.is_reversed ? 1 : 0
+          );
+        }
+        stmts.push(
+          db.prepare(`INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`).bind(...params)
         );
       }
-      insertStmts.push(
-        db.prepare(`INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`).bind(...params)
-      );
     }
-    insertStmts.push(db.prepare(`INSERT OR IGNORE INTO card_states (card_id, user_id) SELECT id, ? FROM cards`).bind(userId));
-    const batchResults = await db.batch(insertStmts);
-    for (let r = 0; r < batchResults.length - 1; r++) {
-      if (batchResults[r].meta && batchResults[r].meta.changes) {
-        cardsCreated += batchResults[r].meta.changes;
+    stmts.push(db.prepare(`INSERT OR IGNORE INTO card_states (card_id, user_id) SELECT id, ? FROM cards`).bind(userId));
+    const batchResults = await db.batch(stmts);
+    if (mode === "update") {
+      for (let r = 0; r < batchResults.length - 1; r += 2) {
+        const updateChanges = batchResults[r].meta?.changes || 0;
+        const insertChanges = batchResults[r + 1]?.meta?.changes || 0;
+        if (updateChanges > 0) cardsUpdated += updateChanges;
+        if (insertChanges > 0) cardsCreated += insertChanges;
       }
+      cardsUpdated = parsedCards.length - cardsCreated;
+    } else {
+      for (let r = 0; r < batchResults.length - 1; r++) {
+        if (batchResults[r].meta && batchResults[r].meta.changes) {
+          cardsCreated += batchResults[r].meta.changes;
+        }
+      }
+      cardsSkipped = parsedCards.length - cardsCreated;
     }
-    const skipped = parsedCards.length - cardsCreated;
     const { results: deckCountRows } = await db.prepare(
       `SELECT c.deck_id, COUNT(*) as total
          FROM cards c
@@ -3049,17 +3158,23 @@ app.post("/import", async (c) => {
       name,
       card_count: deckCountMap[deckCache[name]] || 0
     }));
-    return c.json({
+    const resp = {
       success: true,
-      message: `\u30A4\u30F3\u30DD\u30FC\u30C8\u5B8C\u4E86: ${cardsCreated}\u679A\u306E\u30AB\u30FC\u30C9\u3092\u4F5C\u6210\u3057\u307E\u3057\u305F\u3002`,
+      mode,
+      total_cards: parsedCards.length,
       imported_count: cardsCreated,
-      skipped_count: skipped,
+      updated_count: cardsUpdated,
+      skipped_count: cardsSkipped,
       total_notes_parsed: uniqueNotes.size,
-      total_cards_created: cardsCreated,
       decks_created: decksCreated,
-      skipped_existing: skipped,
       decks: importedDecks
-    });
+    };
+    if (mode === "skip") {
+      resp.message = `\u30A4\u30F3\u30DD\u30FC\u30C8\u5B8C\u4E86: ${cardsCreated}\u679A\u4F5C\u6210, ${cardsSkipped}\u679A\u30B9\u30AD\u30C3\u30D7`;
+    } else {
+      resp.message = `\u30A4\u30F3\u30DD\u30FC\u30C8\u5B8C\u4E86: ${cardsCreated}\u679A\u65B0\u898F\u4F5C\u6210, ${cardsUpdated}\u679A\u66F4\u65B0`;
+    }
+    return c.json(resp);
   } catch (err) {
     console.error("Import error:", err.stack || err);
     return c.json({ error: `\u30A4\u30F3\u30DD\u30FC\u30C8\u30A8\u30E9\u30FC: ${err.message}` }, 500);

@@ -244,10 +244,18 @@ export const fetchStats = () => apiGet(API.STATS);
 /** デッキ別統計を取得 */
 export const fetchDeckStats = (deckId) => apiGet(API.DECK_STATS(deckId));
 
-/** ファイルをインポート */
-export const importFile = (file) => {
+/** ファイルをプレビュー（新規/既存の分類） */
+export const previewImportFile = (file) => {
   const formData = new FormData();
   formData.append('file', file);
+  return apiPostFormData(API.IMPORT_PREVIEW, formData);
+};
+
+/** ファイルをインポート（mode: skip | update） */
+export const importFile = (file, mode = 'skip') => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('mode', mode);
   return apiPostFormData(API.IMPORT, formData);
 };
 

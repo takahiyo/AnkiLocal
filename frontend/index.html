@@ -294,7 +294,33 @@
 
                     <div id="import-loading" class="loading-spinner hidden">
                         <div class="spinner"></div>
-                        <p>ファイルをアップロードしてデータベースへ登録中...</p>
+                        <p>ファイルを解析中...</p>
+                    </div>
+
+                    <!-- インポートプレビュー -->
+                    <div id="import-preview" class="card result-card hidden">
+                        <div class="result-header">
+                            <span class="result-icon">📋</span>
+                            <h3>インポート内容の確認</h3>
+                        </div>
+                        <div id="import-preview-content" class="result-content">
+                            <!-- 動的にプレビュー内容が書き込まれます -->
+                        </div>
+                        <div id="import-mode-container" class="import-mode-container hidden" style="margin: var(--spacing-lg); padding: var(--spacing-md); background: var(--bg-card); border-radius: var(--radius-md);">
+                            <p style="margin-bottom: var(--spacing-sm); font-weight: 600;">更新対象のカードの扱い:</p>
+                            <label style="display: inline-flex; align-items: center; margin-right: var(--spacing-lg); cursor: pointer;">
+                                <input type="radio" name="import-mode" id="import-mode-skip" value="skip" checked>
+                                <span style="margin-left: var(--spacing-xs);">スキップ（既存を保持）</span>
+                            </label>
+                            <label style="display: inline-flex; align-items: center; cursor: pointer;">
+                                <input type="radio" name="import-mode" id="import-mode-update" value="update">
+                                <span style="margin-left: var(--spacing-xs);">更新（上書き）</span>
+                            </label>
+                        </div>
+                        <div class="result-footer" style="justify-content: center; gap: var(--spacing-md);">
+                            <button id="import-execute-btn" class="btn btn-primary" style="font-size: 1.1rem; padding: var(--spacing-sm) var(--spacing-xl);">実行</button>
+                            <button id="import-cancel-btn" class="btn btn-secondary">キャンセル</button>
+                        </div>
                     </div>
 
                     <!-- インポート結果 -->

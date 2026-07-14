@@ -90,8 +90,15 @@ export const IMPORT_IDS = Object.freeze({
   FILE_INPUT: 'import-file-input',
   FILE_BTN: 'import-file-btn',
   LOADING: 'import-loading',
+  PREVIEW: 'import-preview',
+  PREVIEW_CONTENT: 'import-preview-content',
+  MODE_SKIP: 'import-mode-skip',
+  MODE_UPDATE: 'import-mode-update',
+  MODE_CONTAINER: 'import-mode-container',
+  EXECUTE_BTN: 'import-execute-btn',
   RESULT: 'import-result',
   RESULT_CONTENT: 'import-result-content',
+  FILE_NAME: 'import-file-name',
 });
 
 /** トースト通知 */

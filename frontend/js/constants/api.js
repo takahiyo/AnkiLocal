@@ -25,7 +25,10 @@ export const API = Object.freeze({
   /** GET: デッキ一覧取得 */
   DECKS: '/api/decks',
 
-  /** POST: テキストファイルインポート（FormData） */
+  /** POST: テキストファイルインポート プレビュー（FormData） */
+  IMPORT_PREVIEW: '/api/import/preview',
+
+  /** POST: テキストファイルインポート実行（FormData + mode） */
   IMPORT: '/api/import',
 
   /** GET: 指定デッキの学習対象カード */

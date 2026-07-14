@@ -628,12 +628,90 @@ app.get("/decks", async (c) => {
   }
 });
 
+// --- インポート: ファイル解析（プレビュー） ---
+app.post("/import/preview", async (c) => {
+  const db = c.env.DB;
+  try {
+    const formData = await c.req.raw.formData();
+    const file = formData.get("file") as File;
+    if (!file) return c.json({ error: "ファイルがアップロードされていません" }, 400);
+
+    const raw = await file.arrayBuffer();
+    const decoder = new TextDecoder("utf-8");
+    const content = decoder.decode(raw);
+
+    const parsedCards = parseAnkiFile(content);
+    if (parsedCards.length === 0) {
+      return c.json({ success: false, message: "カードが見つかりませんでした。ファイル形式を確認してください。" });
+    }
+
+    // 既存カードの有無を確認する
+    const existingKeys = new Set<string>();
+    const allGuids = Array.from(new Set(parsedCards.map((c) => c.guid)));
+    const GUID_BATCH = 100;
+    for (let i = 0; i < allGuids.length; i += GUID_BATCH) {
+      const chunk = allGuids.slice(i, i + GUID_BATCH);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = await db
+        .prepare(`SELECT guid, cloze_index, is_reversed FROM cards WHERE guid IN (${placeholders})`)
+        .bind(...chunk)
+        .all<{ guid: string; cloze_index: number; is_reversed: number }>();
+      for (const row of rows.results) {
+        existingKeys.add(`${row.guid}:${row.cloze_index}:${row.is_reversed}`);
+      }
+    }
+
+    const newCards: typeof parsedCards = [];
+    const existingCards: typeof parsedCards = [];
+    for (const card of parsedCards) {
+      const key = `${card.guid}:${card.cloze_index}:${card.is_reversed ? 1 : 0}`;
+      if (existingKeys.has(key)) {
+        existingCards.push(card);
+      } else {
+        newCards.push(card);
+      }
+    }
+
+    const uniqueDeckNames = Array.from(new Set(parsedCards.map((c) => c.deck_name)));
+
+    return c.json({
+      success: true,
+      summary: {
+        total: parsedCards.length,
+        new_count: newCards.length,
+        existing_count: existingCards.length,
+      },
+      cards: parsedCards.map((card) => {
+        const key = `${card.guid}:${card.cloze_index}:${card.is_reversed ? 1 : 0}`;
+        return {
+          guid: card.guid,
+          note_type: card.note_type,
+          deck_name: card.deck_name,
+          front: card.front,
+          back: card.back,
+          tags: card.tags,
+          cloze_count: card.cloze_count,
+          cloze_index: card.cloze_index,
+          is_reversed: card.is_reversed,
+          is_new: !existingKeys.has(key),
+        };
+      }),
+      decks: uniqueDeckNames,
+    });
+  } catch (err: any) {
+    console.error("Preview error:", err.stack || err);
+    return c.json({ error: `プレビューエラー: ${err.message}` }, 500);
+  }
+});
+
+// --- インポート: 実行 ---
 app.post("/import", async (c) => {
   const db = c.env.DB;
   const userId = getUserId(c);
   try {
     const formData = await c.req.raw.formData();
     const file = formData.get("file") as File;
+    const mode = (formData.get("mode") as string) || "skip";
 
     if (!file) {
       return c.json({ error: "ファイルがアップロードされていません" }, 400);
@@ -645,10 +723,7 @@ app.post("/import", async (c) => {
 
     const parsedCards = parseAnkiFile(content);
     if (parsedCards.length === 0) {
-      return c.json({
-        success: false,
-        message: "カードが見つかりませんでした。ファイル形式を確認してください。",
-      });
+      return c.json({ success: false, message: "カードが見つかりませんでした。ファイル形式を確認してください。" });
     }
 
     const deckCache: Record<string, number> = {};
@@ -666,7 +741,6 @@ app.post("/import", async (c) => {
     if (missingDecks.length > 0) {
       const deckPlaceholders = missingDecks.map(() => "(?)").join(", ");
       await db.prepare(`INSERT OR IGNORE INTO decks (name) VALUES ${deckPlaceholders}`).bind(...missingDecks).run();
-
       const newDecks = await db.prepare("SELECT id, name FROM decks").all<{ id: number; name: string }>();
       for (const d of newDecks.results) {
         deckCache[d.name] = d.id;
@@ -677,47 +751,105 @@ app.post("/import", async (c) => {
     }
 
     let cardsCreated = 0;
+    let cardsSkipped = 0;
+    let cardsUpdated = 0;
 
     const BATCH_SIZE = 10;
-    const insertStmts: ReturnType<typeof db.prepare>[] = [];
+    const stmts: ReturnType<typeof db.prepare>[] = [];
 
-    for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
-      const chunk = parsedCards.slice(i, i + BATCH_SIZE);
-      const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-      const params: any[] = [];
-
-      for (const card of chunk) {
-        uniqueNotes.add(card.guid);
-        params.push(
-          card.guid,
-          deckCache[card.deck_name],
-          card.note_type,
-          card.front,
-          card.back,
-          card.tags,
-          card.cloze_count,
-          card.cloze_index,
-          card.is_reversed ? 1 : 0
+    if (mode === "update") {
+      // 上書きモード: UPDATE + INSERT
+      for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
+        const chunk = parsedCards.slice(i, i + BATCH_SIZE);
+        for (const card of chunk) {
+          uniqueNotes.add(card.guid);
+          // 既存カードをUPDATE
+          stmts.push(
+            db
+              .prepare(`UPDATE cards SET deck_id = ?, note_type = ?, front = ?, back = ?, tags = ?, cloze_count = ? WHERE guid = ? AND cloze_index = ? AND is_reversed = ?`)
+              .bind(
+                deckCache[card.deck_name],
+                card.note_type,
+                card.front,
+                card.back,
+                card.tags,
+                card.cloze_count,
+                card.guid,
+                card.cloze_index,
+                card.is_reversed ? 1 : 0
+              )
+          );
+          // 存在しなければINSERT (changes=0なら挿入)
+          stmts.push(
+            db
+              .prepare(`INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .bind(
+                card.guid,
+                deckCache[card.deck_name],
+                card.note_type,
+                card.front,
+                card.back,
+                card.tags,
+                card.cloze_count,
+                card.cloze_index,
+                card.is_reversed ? 1 : 0
+              )
+          );
+        }
+      }
+    } else {
+      // スキップモード: INSERT OR IGNORE (従来通り)
+      for (let i = 0; i < parsedCards.length; i += BATCH_SIZE) {
+        const chunk = parsedCards.slice(i, i + BATCH_SIZE);
+        const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+        const params: any[] = [];
+        for (const card of chunk) {
+          uniqueNotes.add(card.guid);
+          params.push(
+            card.guid,
+            deckCache[card.deck_name],
+            card.note_type,
+            card.front,
+            card.back,
+            card.tags,
+            card.cloze_count,
+            card.cloze_index,
+            card.is_reversed ? 1 : 0
+          );
+        }
+        stmts.push(
+          db
+            .prepare(`INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`)
+            .bind(...params)
         );
       }
-
-      insertStmts.push(
-        db
-          .prepare(`INSERT OR IGNORE INTO cards (guid, deck_id, note_type, front, back, tags, cloze_count, cloze_index, is_reversed) VALUES ${placeholders}`)
-          .bind(...params)
-      );
     }
 
-    insertStmts.push(db.prepare(`INSERT OR IGNORE INTO card_states (card_id, user_id) SELECT id, ? FROM cards`).bind(userId));
+    stmts.push(db.prepare(`INSERT OR IGNORE INTO card_states (card_id, user_id) SELECT id, ? FROM cards`).bind(userId));
 
-    const batchResults = await db.batch(insertStmts);
-    for (let r = 0; r < batchResults.length - 1; r++) {
-      if (batchResults[r].meta && batchResults[r].meta.changes) {
-        cardsCreated += batchResults[r].meta.changes;
+    const batchResults = await db.batch(stmts);
+    if (mode === "update") {
+      // UPDATEは2文/カード (UPDATE+INSERT)
+      for (let r = 0; r < batchResults.length - 1; r += 2) {
+        const updateChanges = batchResults[r].meta?.changes || 0;
+        const insertChanges = batchResults[r + 1]?.meta?.changes || 0;
+        if (updateChanges > 0) cardsUpdated += updateChanges;
+        if (insertChanges > 0) cardsCreated += insertChanges;
       }
+      // UPDATEで影響がなかった(= 新規だった)ものは cardsUpdated に含まれない
+      // 実際の更新数 = parsedCards.length - cardsCreated
+      cardsUpdated = parsedCards.length - cardsCreated;
+      // changes==0のUPDATEもstmtsに含まれているので、単純にparsedCards.length - cardsCreated
+      // ただし、changes==0は実際には更新がない既存カード
+      // cardsSkipped はこのモードでは0（更新対象は全てUPDATEされる）
+    } else {
+      for (let r = 0; r < batchResults.length - 1; r++) {
+        if (batchResults[r].meta && batchResults[r].meta.changes) {
+          cardsCreated += batchResults[r].meta.changes;
+        }
+      }
+      cardsSkipped = parsedCards.length - cardsCreated;
     }
-
-    const skipped = parsedCards.length - cardsCreated;
 
     const { results: deckCountRows } = await db
       .prepare(
@@ -739,17 +871,25 @@ app.post("/import", async (c) => {
       card_count: deckCountMap[deckCache[name]] || 0,
     }));
 
-    return c.json({
+    const resp: any = {
       success: true,
-      message: `インポート完了: ${cardsCreated}枚のカードを作成しました。`,
+      mode,
+      total_cards: parsedCards.length,
       imported_count: cardsCreated,
-      skipped_count: skipped,
+      updated_count: cardsUpdated,
+      skipped_count: cardsSkipped,
       total_notes_parsed: uniqueNotes.size,
-      total_cards_created: cardsCreated,
       decks_created: decksCreated,
-      skipped_existing: skipped,
       decks: importedDecks,
-    });
+    };
+
+    if (mode === "skip") {
+      resp.message = `インポート完了: ${cardsCreated}枚作成, ${cardsSkipped}枚スキップ`;
+    } else {
+      resp.message = `インポート完了: ${cardsCreated}枚新規作成, ${cardsUpdated}枚更新`;
+    }
+
+    return c.json(resp);
   } catch (err: any) {
     console.error("Import error:", err.stack || err);
     return c.json({ error: `インポートエラー: ${err.message}` }, 500);
